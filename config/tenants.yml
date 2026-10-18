@@ -14,6 +14,11 @@ tenants:
     # at recommend whatever this says.
     autonomy:
       default: approve_to_run
+    # Optional integrations. Values are ids in those systems, never secrets.
+    halopsa: { client_id: 12, site_id: 34 }  # HaloPSA client and site this customer's tickets go to
+    teams_webhook_env: LAB_TEAMS_WEBHOOK      # Workflows webhook URL of the customer's Teams channel
+    netbox_tenant: lab                        # NetBox tenant slug (defaults to the tenant id)
+    semaphore: { inventory_id: 1, repository_id: 1, environment_id: 1 }  # for `provision semaphore`
   - id: contoso
     name: Contoso Retail (fictitious)
     intake_token_env: CONTOSO_INTAKE_TOKEN

@@ -59,13 +59,22 @@ class Semaphore:
 
     def template_id(self, project_id: int, runbook_id: str) -> int:
         if project_id not in self._templates:
-            resp = self.http.get(f"/api/project/{project_id}/templates")
-            resp.raise_for_status()
-            self._templates[project_id] = {t["name"]: t["id"] for t in resp.json()}
+            self._templates[project_id] = {t["name"]: t["id"] for t in self.templates(project_id)}
         try:
             return self._templates[project_id][runbook_id]
         except KeyError:
             raise LookupError(f"Semaphore project {project_id} has no template named {runbook_id!r}") from None
+
+    def templates(self, project_id: int) -> list[dict[str, Any]]:
+        resp = self.http.get(f"/api/project/{project_id}/templates", params={"sort": "name", "order": "asc"})
+        resp.raise_for_status()
+        return resp.json()
+
+    def create_template(self, project_id: int, template: dict[str, Any]) -> int:
+        resp = self.http.post(f"/api/project/{project_id}/templates", json={"project_id": project_id, **template})
+        resp.raise_for_status()
+        self._templates.pop(project_id, None)
+        return int(resp.json()["id"])
 
     def start(self, project_id: int, runbook_id: str, extra_vars: dict[str, Any]) -> int:
         body = {"template_id": self.template_id(project_id, runbook_id), "environment": json.dumps(extra_vars)}

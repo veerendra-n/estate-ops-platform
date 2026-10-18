@@ -15,7 +15,7 @@ import re
 from typing import Any
 
 import nats
-from nats.js.api import ConsumerConfig, StreamConfig
+from nats.js.api import ConsumerConfig, DeliverPolicy, StreamConfig
 from nats.js.errors import NotFoundError
 
 DAY = 24 * 3600
@@ -71,6 +71,17 @@ class Bus:
             durable="triage",
             stream=self.intake_stream,
             config=ConsumerConfig(ack_wait=120, max_deliver=10),
+        )
+
+    async def events_subscription(self, durable: str):
+        """A durable consumer of case events for one integration. One message in flight at a time, so a
+        failing event is retried before any later one (a ticket note never lands before its ticket).
+        A new integration starts from new events, so switching it on doesn't replay a month of cases."""
+        return await self.js.pull_subscribe(
+            f"{self.prefix}.events.>",
+            durable=durable,
+            stream=self.events_stream,
+            config=ConsumerConfig(ack_wait=120, max_deliver=-1, max_ack_pending=1, deliver_policy=DeliverPolicy.NEW),
         )
 
     async def publish_event(self, entry: dict[str, Any]) -> None:

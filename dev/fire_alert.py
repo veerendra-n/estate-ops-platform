@@ -14,7 +14,7 @@ import urllib.request
 ROWS = {
     "sql-log-used-high": {"sqlserver_database_name": "FinanceERP", "used_pct": 96.4},
     "print-spooler-stopped": {"service": "Spooler"},
-    "disk-free-low": {"volume": "D:", "free_pct": 4.2},
+    "disk-free-low": {"mountpoint": "D:", "used": 0.958},
 }
 
 

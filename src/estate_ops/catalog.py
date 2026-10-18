@@ -26,6 +26,12 @@ class Alert:
     severity: str
     runbook: str | None
     runbook_params: dict[str, str]
+    # How OpenObserve evaluates it; used when provisioning alerts.
+    stream_type: str = "logs"
+    stream: str = "default"
+    query: str | None = None
+    period: str = "15m"
+    frequency: str = "5m"
 
 
 class Catalog:
@@ -49,10 +55,18 @@ class Catalog:
                 severity=a.get("severity", "P3"),
                 runbook=a.get("runbook"),
                 runbook_params=dict(a.get("runbook_params") or {}),
+                stream_type=a.get("stream_type", "logs"),
+                stream=a.get("stream", "default"),
+                query=a.get("query"),
+                period=str(a.get("period", "15m")),
+                frequency=str(a.get("frequency", "5m")),
             )
             for a in raw_alerts
         ]
         return cls(data, alerts)
+
+    def alerts(self) -> list[Alert]:
+        return list(self._alerts.values())
 
     def runbook(self, runbook_id: str) -> dict[str, Any]:
         try:

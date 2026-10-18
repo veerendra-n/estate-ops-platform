@@ -39,12 +39,15 @@ OpenObserve alert ──webhook──▶ API ──▶ NATS JetStream ──▶ 
   guard, which refuses a live run without it.
 - **Ledger**: append-only, hash chained per customer; the case conversation in the console *is* the ledger.
   Every entry is also published to NATS (`<prefix>.events.<tenant>.<kind>`) for other consumers.
+- **Integrations**: HaloPSA ticket per case with a note per step, closed on resolve; Teams cards when a
+  case needs a person or was fixed; NetBox discovery into the estate graph; Semaphore templates and
+  OpenObserve alerts provisioned from the ops-foundation catalog; console sign-in with Entra ID or Google.
 - **AI spend**: every model call is metered per customer and case; above the monthly budget only P1/P2
   cases use the model.
 
 ## Run it locally
 
-Needs Docker. Semaphore and OpenObserve are replaced by fakes (`dev/fakes.py`) that behave like
+Needs Docker. Semaphore, OpenObserve, HaloPSA, Teams and NetBox are replaced by fakes (`dev/fakes.py`) that behave like
 ops-foundation's runbooks on the fictitious `lab` customer.
 
 ```sh
@@ -54,6 +57,7 @@ python dev/fire_alert.py          # SQL log almost full on lab-sql01
 open http://localhost:8080        # sign in with any name and the CONSOLE_TOKEN from .env
 ```
 
+Tickets and Teams cards from the fake HaloPSA and Teams show at http://localhost:8090/_inbox.
 The stack also runs Postgres, Neo4j Community (browser on http://localhost:7474), NATS JetStream and
 Temporal (UI on http://localhost:8233, one workflow per case).
 
@@ -85,6 +89,8 @@ workflow are part of what they test. The defaults match the commands above; `TES
 | `src/estate_ops/workflows.py` | The Temporal case workflow: order of steps, waits, the approval update |
 | `src/estate_ops/worker.py` | Temporal activities, the NATS triage consumer, the ledger relay |
 | `src/estate_ops/bus.py` | NATS JetStream streams and subjects |
+| `src/estate_ops/integrations/` | HaloPSA, Teams, NetBox discovery, provisioning of Semaphore and OpenObserve |
+| `src/estate_ops/auth.py` | Console sign-in with OpenID Connect |
 | `src/estate_ops/agents/diagnosis.py` | The diagnosis agent: tools, answer schema, fallbacks |
 | `src/estate_ops/service.py` | The case steps: diagnose, propose, dry run, approve, run |
 | `src/estate_ops/policy.py` | The autonomy dial |

@@ -8,8 +8,6 @@ proposal that is not waiting for a decision; the API never writes a decision its
 from __future__ import annotations
 
 import asyncio
-import hmac
-import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,7 +20,7 @@ from pydantic import BaseModel, Field
 from temporalio.client import WorkflowUpdateFailedError
 from temporalio.service import RPCError
 
-from . import budget, ledger, triage
+from . import auth, budget, ledger, triage
 from .bus import Bus
 from .service import Platform
 from .workflows import CaseWorkflow, DecideInput, workflow_id
@@ -31,7 +29,7 @@ CONSOLE_DIR = Path(__file__).resolve().parents[2] / "console"
 
 
 class Decision(BaseModel):
-    who: str = Field(min_length=1, max_length=80)
+    who: str = Field(default="", max_length=80)  # only used with the shared token; SSO uses the ID token
     note: str = Field(default="", max_length=500)
 
 
@@ -55,13 +53,27 @@ def create_app(platform: Platform) -> FastAPI:
 
     app = FastAPI(title="Estate Ops Platform", version="0.2.0", lifespan=lifespan)
     app.state.platform = platform
+    auth.install(app, platform.settings)
 
-    def console_auth(authorization: str | None = Header(default=None)) -> None:
-        # One shared console token until SSO (OIDC) is added; engineers still sign approvals by name.
-        expected = os.environ.get("CONSOLE_TOKEN")
-        presented = _bearer(authorization)
-        if not expected or not presented or not hmac.compare_digest(expected.encode(), presented.encode()):
-            raise HTTPException(401, "console token required")
+    @app.get("/auth/me", include_in_schema=False)
+    def me(request: Request, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        user = auth.current_user(request, platform.settings, authorization)
+        return {
+            "sso": auth.sso_enabled(platform.settings),
+            "user": user if user and user["sub"] != "console-token" else None,
+            "signed_in": user is not None,
+        }
+
+    @app.post("/auth/logout", include_in_schema=False)
+    def logout(request: Request) -> dict[str, Any]:
+        request.session.clear()
+        return {"ok": True}
+
+    def console_auth(request: Request, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        user = auth.current_user(request, platform.settings, authorization)
+        if user is None:
+            raise HTTPException(401, "sign in required")
+        return user
 
     def engineer_scope() -> list[str]:
         return platform.tenants.ids()  # later: the tenants this engineer's team serves
@@ -133,12 +145,13 @@ def create_app(platform: Platform) -> FastAPI:
                 ),
             }
 
-    async def _decide(proposal_id: str, body: Decision, approve: bool) -> dict[str, Any]:
+    async def _decide(proposal_id: str, body: Decision, approve: bool, user: dict[str, Any]) -> dict[str, Any]:
         try:
             uuid.UUID(proposal_id)
         except ValueError:
             raise HTTPException(404, "no such proposal") from None
-        if not body.who.strip():
+        who = auth.signature(user, body.who)
+        if not who:
             raise HTTPException(422, "a decision needs a named engineer")
 
         def lookup():
@@ -151,7 +164,7 @@ def create_app(platform: Platform) -> FastAPI:
         handle = app.state.temporal.get_workflow_handle(workflow_id(str(row["case_id"])))
         for _ in range(30):
             try:
-                result = await handle.execute_update(CaseWorkflow.decide, DecideInput(proposal_id, approve, body.who, body.note))
+                result = await handle.execute_update(CaseWorkflow.decide, DecideInput(proposal_id, approve, who, body.note))
                 return {"proposal_id": result["proposal_id"], "status": result["status"]}
             except WorkflowUpdateFailedError as exc:
                 reason = getattr(exc.cause, "message", None) or "this proposal cannot be decided"
@@ -164,13 +177,13 @@ def create_app(platform: Platform) -> FastAPI:
             await asyncio.sleep(0.1)
         raise HTTPException(409, reason)
 
-    @app.post("/api/v1/proposals/{proposal_id}/approve", dependencies=[Depends(console_auth)])
-    async def approve(proposal_id: str, body: Decision) -> dict[str, Any]:
-        return await _decide(proposal_id, body, True)
+    @app.post("/api/v1/proposals/{proposal_id}/approve")
+    async def approve(proposal_id: str, body: Decision, user: dict = Depends(console_auth)) -> dict[str, Any]:  # noqa: B008
+        return await _decide(proposal_id, body, True, user)
 
-    @app.post("/api/v1/proposals/{proposal_id}/reject", dependencies=[Depends(console_auth)])
-    async def reject(proposal_id: str, body: Decision) -> dict[str, Any]:
-        return await _decide(proposal_id, body, False)
+    @app.post("/api/v1/proposals/{proposal_id}/reject")
+    async def reject(proposal_id: str, body: Decision, user: dict = Depends(console_auth)) -> dict[str, Any]:  # noqa: B008
+        return await _decide(proposal_id, body, False, user)
 
     @app.get("/api/v1/tenants", dependencies=[Depends(console_auth)])
     def tenants() -> list[dict[str, Any]]:

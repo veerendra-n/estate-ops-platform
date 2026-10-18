@@ -1,5 +1,5 @@
 # Local stack: Postgres, Neo4j Community, NATS JetStream, Temporal (with its web UI), the API with the
-# console, the worker, and fakes for Semaphore and OpenObserve. Copy .env.example to .env first.
+# console, the worker, and fakes for Semaphore, OpenObserve, HaloPSA, Teams and NetBox. Copy .env.example to .env first.
 # Memory limits are sized for a laptop and for one small platform instance; raise them per real load.
 x-platform: &platform
   build: .
@@ -14,6 +14,13 @@ x-platform: &platform
     TEMPORAL_ADDRESS: temporal:7233
     SEMAPHORE_URL: ${SEMAPHORE_URL:-http://fakes:8090/semaphore}
     OPENOBSERVE_URL: ${OPENOBSERVE_URL:-http://fakes:8090/openobserve}
+    # Integrations default to the fakes too, so the demo shows tickets and cards (see localhost:8090/_inbox).
+    HALO_URL: ${HALO_URL:-http://fakes:8090/halo}
+    HALO_CLIENT_ID: ${HALO_CLIENT_ID:-demo}
+    HALO_CLIENT_SECRET: ${HALO_CLIENT_SECRET:-demo}
+    LAB_TEAMS_WEBHOOK: ${LAB_TEAMS_WEBHOOK:-http://fakes:8090/teams/lab}
+    NETBOX_URL: ${NETBOX_URL:-http://fakes:8090/netbox}
+    NETBOX_TOKEN: ${NETBOX_TOKEN:-demo}
   depends_on:
     migrate:
       condition: service_completed_successfully

@@ -201,6 +201,7 @@ GRAPH_KINDS = {
     "backup_job": "protected by",
     "sql_agent_job": "jobs",
     "hypervisor_host": "runs on",
+    "hypervisor_cluster": "in cluster",
     "datastore": "stored on",
 }
 

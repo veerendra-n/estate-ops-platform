@@ -106,6 +106,7 @@ def database_url(template_db):
 @pytest.fixture
 def fakes_client():
     fakes.clear_scenarios()
+    fakes.reset()
     fakes._tasks.clear()
     return TestClient(fakes.app)
 
@@ -115,6 +116,7 @@ def make_platform(database_url, graph, fakes_client, monkeypatch):
     monkeypatch.setenv("LAB_INTAKE_TOKEN", "lab-test-token")
     monkeypatch.setenv("CONTOSO_INTAKE_TOKEN", "contoso-test-token")
     monkeypatch.setenv("CONSOLE_TOKEN", "console-test-token")
+    monkeypatch.setenv("LAB_TEAMS_WEBHOOK", "http://fakes/teams/lab")
     made = []
 
     def _make(anthropic=None, tenants_file=None, **settings_overrides) -> Platform:
@@ -160,8 +162,9 @@ def make_platform(database_url, graph, fakes_client, monkeypatch):
 class Stack:
     """A platform with its worker running in a background thread and an API client, as in production."""
 
-    def __init__(self, platform: Platform):
+    def __init__(self, platform: Platform, integrations: list | None = None):
         self.platform = platform
+        self.integrations = integrations or []
         self._stop: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ready = threading.Event()
@@ -178,7 +181,7 @@ class Stack:
             self._loop = asyncio.get_running_loop()
             self._stop = asyncio.Event()
             ready = asyncio.Event()
-            task = asyncio.create_task(worker.run(self.platform, self._stop, ready))
+            task = asyncio.create_task(worker.run(self.platform, self._stop, ready, self.integrations))
             await ready.wait()
             self._ready.set()
             await task
@@ -209,8 +212,9 @@ class Stack:
 def make_stack(make_platform):
     stacks = []
 
-    def _make(**kwargs) -> Stack:
-        stack = Stack(make_platform(**kwargs))
+    def _make(integrations=None, **kwargs) -> Stack:
+        platform = make_platform(**kwargs)
+        stack = Stack(platform, [make(platform) for make in integrations or []])
         stacks.append(stack)
         return stack
 

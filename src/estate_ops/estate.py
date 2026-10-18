@@ -68,6 +68,24 @@ class EstateGraph:
         )
         return len(assets)
 
+    def drop_relations(self, tenant_id: str, source: str) -> None:
+        """Remove the relations one source wrote, before it writes its current view again."""
+        self.driver.execute_query(
+            "MATCH (:Asset {tenant_id: $tenant})-[r:REL {source: $source}]->(:Asset {tenant_id: $tenant}) DELETE r",
+            tenant=tenant_id,
+            source=source,
+        )
+
+    def prune(self, tenant_id: str, source: str, keep_ids: list[str]) -> int:
+        """Delete this source's assets that it no longer reports. Returns how many went."""
+        records, _, _ = self.driver.execute_query(
+            "MATCH (a:Asset {tenant_id: $tenant, source: $source}) WHERE NOT a.uid IN $keep DETACH DELETE a RETURN count(*) AS n",
+            tenant=tenant_id,
+            source=source,
+            keep=[_uid(tenant_id, i) for i in keep_ids],
+        )
+        return records[0]["n"]
+
     def host(self, tenant_id: str, host: str) -> dict[str, Any] | None:
         """The server asset for an inventory host name, only within this tenant."""
         records, _, _ = self.driver.execute_query(

@@ -92,9 +92,17 @@ There is no separate timeline table to drift from the audit trail. Agent posts, 
 evidence are entries in one append-only chain per customer; `GET /api/v1/tenants` reports whether each
 chain verifies.
 
+## Integrations
+
+HaloPSA and Teams react to the NATS events stream rather than being called from the workflow, so an outage
+of either never holds up a case, and each catches up in order when it is back. NetBox discovery replaces
+the assets it wrote last time and leaves applications, databases and backup jobs from other sources alone.
+Provisioning creates Semaphore templates and OpenObserve alerts from the ops-foundation catalog, so the
+alert, the runbook link and the template name can't drift apart. Console sign-in is OpenID Connect; once
+an issuer is set, the shared token stops working and approvals carry the name and email from the ID token.
+
 ## Not in this slice
 
-Sign-in is a shared console token plus the engineer's name on each approval; SSO (OIDC) comes before any
-real customer. Teams approval cards, the HaloPSA note writer hook, discovery jobs that fill the estate
-graph, the evaluation harness and the other agents are next. See [integrations.md](integrations.md) for
-what still needs a lab check.
+Approving from inside Teams (needs a bot registration), the evaluation harness and the other agents
+(concierge, forecast, problem, reporter) are next. Discovery reads NetBox only; vCenter, cloud and backup
+inventories come later. See [integrations.md](integrations.md) for what still needs a lab check.

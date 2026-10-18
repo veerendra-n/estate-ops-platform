@@ -49,6 +49,28 @@ class Settings:
     run_timeout_seconds: float = 1800.0
     # An approval nobody answers escalates the case after this long.
     approval_timeout_hours: float = 72.0
+    # Where engineers reach the console; used for links in tickets and Teams cards, and the SSO callback.
+    public_url: str = "http://localhost:8080"
+    # HaloPSA: one instance for the managed service; each tenant names its Halo client id.
+    halo_url: str | None = None
+    halo_client_id: str | None = None
+    halo_client_secret: str | None = None
+    halo_tenant: str | None = None
+    halo_ticket_type_id: int = 1
+    halo_closed_status_id: int = 9
+    # P1..P4 to Halo priority ids.
+    halo_priorities: dict[str, int] = field(default_factory=lambda: {"P1": 1, "P2": 2, "P3": 3, "P4": 4})
+    # NetBox: the inventory source of truth that discovery reads into the estate graph.
+    netbox_url: str | None = None
+    netbox_token: str | None = None
+    discovery_interval_minutes: float = 60.0
+    # Console sign-in with OpenID Connect (Entra ID, Google Workspace, Keycloak...). Without an issuer the
+    # console falls back to the shared CONSOLE_TOKEN, which is for local use only.
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: str | None = None
+    oidc_allowed: tuple[str, ...] = ()
+    session_secret: str | None = None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -78,4 +100,19 @@ class Settings:
             task_queue=_env("TEMPORAL_TASK_QUEUE", "estate-cases"),
             run_poll_seconds=float(_env("RUN_POLL_SECONDS", "3")),
             approval_timeout_hours=float(_env("APPROVAL_TIMEOUT_HOURS", "72")),
+            public_url=_env("PUBLIC_URL", "http://localhost:8080").rstrip("/"),
+            halo_url=_env("HALO_URL"),
+            halo_client_id=_env("HALO_CLIENT_ID"),
+            halo_client_secret=_env("HALO_CLIENT_SECRET"),
+            halo_tenant=_env("HALO_TENANT"),
+            halo_ticket_type_id=int(_env("HALO_TICKET_TYPE_ID", "1")),
+            halo_closed_status_id=int(_env("HALO_CLOSED_STATUS_ID", "9")),
+            netbox_url=_env("NETBOX_URL"),
+            netbox_token=_env("NETBOX_TOKEN"),
+            discovery_interval_minutes=float(_env("DISCOVERY_INTERVAL_MINUTES", "60")),
+            oidc_issuer=_env("OIDC_ISSUER"),
+            oidc_client_id=_env("OIDC_CLIENT_ID"),
+            oidc_client_secret=_env("OIDC_CLIENT_SECRET"),
+            oidc_allowed=tuple(d.strip().lower() for d in (_env("OIDC_ALLOWED") or "").split(",") if d.strip()),
+            session_secret=_env("SESSION_SECRET"),
         )

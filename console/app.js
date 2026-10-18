@@ -24,12 +24,15 @@ const OUTCOME = {
   timed_out: ["Timed out", "c-bad"],
 };
 
-const state = { view: "active", tenant: null, cases: [], selected: null, detail: null, me: store.get("eo-name"), token: store.get("eo-token") };
+const state = {
+  view: "active", tenant: null, cases: [], selected: (location.hash.match(/^#case=([\w-]+)$/) || [])[1] || null, detail: null,
+  me: store.get("eo-name"), token: store.get("eo-token"), sso: false,
+};
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     ...opts,
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${state.token}`, ...(opts.headers || {}) },
+    headers: { "Content-Type": "application/json", ...(state.sso ? {} : { Authorization: `Bearer ${state.token}` }), ...(opts.headers || {}) },
   });
   if (res.status === 401) { signIn(); throw new Error("Sign in again"); }
   const body = await res.json().catch(() => ({}));
@@ -43,6 +46,7 @@ function toast(text) {
 }
 
 function signIn() {
+  if (state.sso) { location.href = "/auth/login"; return; }
   const dlg = $("#signin");
   if (dlg.open) return;
   $("#si-name").value = state.me || "";
@@ -98,7 +102,7 @@ $("#tenants").addEventListener("click", (e) => {
 });
 $("#cases").addEventListener("click", (e) => {
   const b = e.target.closest("[data-case]"); if (!b) return;
-  state.selected = b.dataset.case; renderQueue(); loadCase();
+  state.selected = b.dataset.case; history.replaceState(null, "", `#case=${state.selected}`); renderQueue(); loadCase();
 });
 
 // ---- workspace -----------------------------------------------------------------------------------------------
@@ -198,7 +202,7 @@ function renderCase() {
 $("#workspace").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-act]"); if (!b) return;
   const box = b.closest("[data-proposal]");
-  if (!state.me) return signIn();
+  if (!state.me && !state.sso) return signIn();
   box.querySelectorAll("button").forEach((x) => (x.disabled = true));
   try {
     await api(`/api/v1/proposals/${box.dataset.proposal}/${b.dataset.act}`, {
@@ -218,7 +222,7 @@ async function loadCase() {
 }
 
 async function refresh() {
-  if (!state.token) return signIn();
+  if (!state.token && !state.sso) return signIn();
   try {
     const [cases, tenants] = await Promise.all([api("/api/v1/cases"), api("/api/v1/tenants")]);
     state.cases = cases;
@@ -227,5 +231,16 @@ async function refresh() {
   } catch (err) { if (err.message !== "Sign in again") toast(err.message); }
 }
 
-refresh();
-setInterval(refresh, 4000);
+async function start() {
+  // With single sign-on the session cookie carries the engineer; without it, the shared token and a typed name.
+  const me = await fetch("/auth/me").then((r) => r.json()).catch(() => ({ sso: false }));
+  state.sso = !!me.sso;
+  if (state.sso) {
+    if (!me.signed_in) { location.href = "/auth/login"; return; }
+    state.me = me.user.name;
+  }
+  if (state.selected) loadCase().catch(() => {});
+  refresh();
+  setInterval(refresh, 4000);
+}
+start();

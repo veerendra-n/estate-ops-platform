@@ -7,6 +7,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import psycopg
 import yaml
@@ -24,12 +25,25 @@ class Tenant:
     diagnosis: str = "llm"
     ai_budget_usd_month: float = 40.0
     autonomy: dict[str, str] = field(default_factory=lambda: {"default": "approve_to_run"})
+    # Integrations, each optional. halopsa: {client_id, site_id?, team?}; teams_webhook_env names the
+    # variable holding the channel's Workflows webhook URL; netbox_tenant defaults to the tenant id;
+    # semaphore: {inventory_id, repository_id, environment_id} for provisioning task templates.
+    halopsa: dict[str, Any] | None = None
+    teams_webhook_env: str | None = None
+    netbox_tenant: str | None = None
+    semaphore: dict[str, int] | None = None
 
     def autonomy_for(self, runbook_id: str) -> str:
         mode = self.autonomy.get(runbook_id, self.autonomy.get("default", "approve_to_run"))
         if mode not in AUTONOMY_MODES:
             raise ValueError(f"{self.id}: unknown autonomy mode {mode!r} for {runbook_id}")
         return mode
+
+    def intake_token(self) -> str | None:
+        return os.environ.get(self.intake_token_env)
+
+    def teams_webhook(self) -> str | None:
+        return os.environ.get(self.teams_webhook_env) if self.teams_webhook_env else None
 
     def intake_token_ok(self, presented: str | None) -> bool:
         expected = os.environ.get(self.intake_token_env)

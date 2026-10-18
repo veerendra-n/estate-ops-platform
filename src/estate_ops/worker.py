@@ -1,4 +1,5 @@
-"""The worker: Temporal activities and the case workflow, the NATS triage consumer, and the ledger relay.
+"""The worker: Temporal activities and the case workflow, the NATS triage consumer, the ledger relay,
+the integrations (HaloPSA, Teams) and NetBox discovery, each when configured.
 
 One process runs all three. Several workers can run side by side: Temporal hands each activity to one of
 them, the durable NATS consumer hands each intake message to one of them, and the relay cursor is updated
@@ -19,7 +20,7 @@ from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Worker
 
-from . import triage
+from . import integrations, triage
 from .bus import Bus
 from .service import Platform, WorkflowError
 from .workflows import CaseInput, CaseWorkflow, workflow_id
@@ -145,7 +146,46 @@ async def run_relay(platform: Platform, bus: Bus, stop: asyncio.Event, every: fl
             pass
 
 
-async def run(platform: Platform, stop: asyncio.Event, ready: asyncio.Event | None = None) -> None:
+def configured_integrations(platform: Platform) -> list:
+    from .integrations.halopsa import HaloClient, HaloPSA
+    from .integrations.teams import Teams
+
+    s, out = platform.settings, []
+    if s.halo_url and s.halo_client_id and s.halo_client_secret:
+        out.append(HaloPSA(platform, HaloClient(s.halo_url, s.halo_client_id, s.halo_client_secret, s.halo_tenant)))
+    if any(t.teams_webhook() for t in platform.tenants):
+        out.append(Teams(platform))
+    return out
+
+
+def discover_all(platform: Platform) -> dict[str, Any]:
+    from .integrations import netbox
+
+    s = platform.settings
+    client = netbox.NetBoxClient(s.netbox_url, s.netbox_token)
+    results: dict[str, Any] = {}
+    for tenant in platform.tenants:
+        try:
+            results[tenant.id] = netbox.discover(client, platform.graph, tenant)
+        except Exception as exc:  # one customer's NetBox trouble must not stop the others
+            log.exception("discovery for %s failed", tenant.id)
+            results[tenant.id] = {"error": f"{type(exc).__name__}: {exc}"}
+    return results
+
+
+async def run_discovery(platform: Platform, stop: asyncio.Event) -> None:
+    every = platform.settings.discovery_interval_minutes * 60
+    while not stop.is_set():
+        log.info("discovery: %s", await asyncio.to_thread(discover_all, platform))
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=every)
+        except TimeoutError:
+            pass
+
+
+async def run(
+    platform: Platform, stop: asyncio.Event, ready: asyncio.Event | None = None, with_integrations: list | None = None
+) -> None:
     s = platform.settings
     client = await temporal_client(platform)
     bus = await Bus.connect(s.nats_url, s.nats_prefix)
@@ -163,6 +203,12 @@ async def run(platform: Platform, stop: asyncio.Event, ready: asyncio.Event | No
                 asyncio.create_task(run_triage(platform, bus, client, stop)),
                 asyncio.create_task(run_relay(platform, bus, stop)),
             ]
+            chosen = configured_integrations(platform) if with_integrations is None else with_integrations
+            for integration in chosen:
+                tasks.append(asyncio.create_task(integrations.run(platform, bus, integration, stop)))
+                log.info("integration %s on", integration.name)
+            if s.netbox_url and s.netbox_token:
+                tasks.append(asyncio.create_task(run_discovery(platform, stop)))
             log.info(
                 "worker started (queue %s, model %s)",
                 s.task_queue,

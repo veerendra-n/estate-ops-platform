@@ -12,6 +12,8 @@
   query in `estate.py` matches on it. Agents never get a Cypher tool.
 - Keep AI spend low: deterministic first, meter every model call with `budget.record`, keep the system
   prompt and tool list byte-stable so caching works.
+- Integrations consume the NATS events stream (`integrations/__init__.py`); they must be idempotent per
+  ledger entry and never block a case. New external ids go in `external_refs`.
 - No secrets in the repo. `config/tenants.yml` names environment variables; `.env` is git-ignored.
 - Before pushing: `ruff check . && ruff format --check . && python -m pytest` (needs Postgres, Neo4j, NATS
   with JetStream and a Temporal dev server; see README "Develop").
