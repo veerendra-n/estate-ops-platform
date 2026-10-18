@@ -6,6 +6,9 @@
 | OpenObserve queries | `POST /api/{org}/_search` with SQL built from fixed templates (`telemetry.py`) | Faked locally; confirm stream and column names |
 | ops-foundation catalog | Reads `build/catalog.json` (`CATALOG_FILE`); alert specs from its `alerts` key or `ALERTS_DIR` | Working; tests use a snapshot (`dev/refresh_catalog.py`) |
 | Semaphore | REST API v2: list templates, start a task with extra variables, read status and output | Faked locally; confirm in the lab |
+| Neo4j Community | Bolt driver; two fixed queries per tenant (`estate.py`); seeded from `config/seed/` | Working; discovery jobs to fill it are next |
+| NATS JetStream | `<prefix>_INTAKE` (webhooks) and `<prefix>_EVENTS` (ledger entries) streams | Working |
+| Temporal | `CaseWorkflow` on task queue `estate-cases`; approvals as the `decide` update | Working; self-hosted on Postgres |
 | Claude API | `anthropic` SDK, diagnosis agent only | Mocked in tests; runs live with `ANTHROPIC_API_KEY` |
 
 ## OpenObserve webhook template

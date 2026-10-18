@@ -1,20 +1,22 @@
 """The model path of the diagnosis agent, with a scripted stand-in for the Claude client.
 
 These check the harness, not the model: tools stay inside one tenant, alert values beat the model's,
-spend is metered, and every failure mode falls back to the deterministic diagnosis.
+spend is metered, and every failure mode falls back to the deterministic diagnosis. They run the diagnose
+step directly, without the workflow around it.
 """
 
 from __future__ import annotations
 
 import json
+import uuid
 from types import SimpleNamespace as NS
 
-from conftest import SQL_ALERT, drain
+from conftest import SQL_ALERT
 from fastapi.testclient import TestClient
 
+from estate_ops import triage
 from estate_ops.api import create_app
 
-LAB = {"Authorization": "Bearer lab-test-token"}
 CONSOLE = {"Authorization": "Bearer console-test-token"}
 
 
@@ -58,12 +60,17 @@ class FakeClaude:
         return item
 
 
+def _diagnose(platform, alert, tenant="lab") -> str:
+    with platform.db.scope(tenant) as conn:
+        case_id = triage.ingest(conn, tenant, platform.catalog, alert, str(uuid.uuid4()))[0].case_id
+    platform.diagnose(tenant, case_id)
+    return case_id
+
+
 def _run(make_platform, claude, alert=SQL_ALERT):
     platform = make_platform(anthropic=claude)
-    api = TestClient(create_app(platform))
-    case_id = api.post("/api/v1/intake/openobserve/lab", json=alert, headers=LAB).json()["cases"][0]["case_id"]
-    drain(platform)
-    return platform, api.get(f"/api/v1/cases/{case_id}", headers=CONSOLE).json()
+    case_id = _diagnose(platform, alert)
+    return platform, TestClient(create_app(platform)).get(f"/api/v1/cases/{case_id}", headers=CONSOLE).json()
 
 
 def test_model_diagnosis_with_tools(make_platform):
@@ -97,7 +104,7 @@ def test_model_diagnosis_with_tools(make_platform):
     assert diag["method"] == "llm" and diag["confidence"] == "high"
     # The alert's database wins over the model's; the model's optional shrink target is kept.
     assert detail["proposals"][0]["params"] == {"rb_database": "FinanceERP", "rb_shrink_target_mb": 8192}
-    assert detail["case"]["status"] == "awaiting_approval"
+    assert detail["case"]["status"] == "running"  # proposed and handed to the dry run
     assert detail["ai_cost_usd"] > 0
 
     # Tool results went back in one user message per turn; the foreign asset came back as not found.
@@ -146,7 +153,7 @@ def test_refusal_api_error_and_bad_json_fall_back(make_platform):
         _, detail = _run(make_platform, FakeClaude(script))
         diag = next(e for e in detail["timeline"] if e["kind"] == "diagnosis")["body"]
         assert diag["method"] == "deterministic", script
-        assert detail["case"]["status"] == "awaiting_approval"
+        assert detail["case"]["status"] == "running"
 
 
 def test_over_budget_uses_no_model_except_for_urgent_cases(make_platform):
@@ -172,8 +179,6 @@ def test_over_budget_uses_no_model_except_for_urgent_cases(make_platform):
 def test_deterministic_tenant_never_calls_the_model(make_platform):
     claude = FakeClaude([])
     platform = make_platform(anthropic=claude)
-    api = TestClient(create_app(platform))
     payload = {"alert_id": "print-spooler-stopped", "rows": [{"tenant_id": "contoso", "host_name": "cto-prt01"}]}
-    api.post("/api/v1/intake/openobserve/contoso", json=payload, headers={"Authorization": "Bearer contoso-test-token"})
-    drain(platform)
+    _diagnose(platform, payload, "contoso")
     assert claude.requests == []

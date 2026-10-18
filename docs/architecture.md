@@ -12,25 +12,50 @@ runbooks) stay standard and swappable.
 | API | FastAPI | — |
 | Agents | Diagnosis agent on the Claude API with typed, read-only tools | Concierge, forecast, problem and reporter agents on the same tool layer |
 | Tools | Python functions with strict JSON schemas, bound to one customer | Published as an MCP server so the copilot and other runtimes share them |
-| Workflow | Postgres job queue (`FOR UPDATE SKIP LOCKED`) | Temporal |
-| Events | Webhook straight into the API | NATS |
-| Estate graph | Two Postgres tables and a recursive query | Neo4j, behind `estate.py` |
+| Workflow | Temporal, self-hosted (one `CaseWorkflow` per case, on Postgres) | Change windows, customer replies and compensation as more workflows |
+| Events | NATS JetStream: intake queue and a case event stream | Consumers for Teams notices, SLA clocks, the forecast and reporter agents |
+| Estate graph | Neo4j Community, behind `estate.py` | Discovery jobs filling it; path queries for blast radius |
 | Case ledger | Postgres, append-only, hash chained per customer | Daily export of the chain head to object storage |
 | Policy | Python (`policy.py`) | Open Policy Agent if rules multiply per customer |
 | Runbooks | ops-foundation, via Semaphore | — |
 
+All free, self-hosted editions: Neo4j Community (GPLv3), NATS (Apache 2.0), Temporal (MIT). Together they
+add about 0.7 GB of memory to a platform instance at rest (measured in the local stack: Neo4j about
+540 MB with a 512 MB heap cap, Temporal about 80 MB, NATS about 5 MB).
+
+## How a case flows
+
+```
+OpenObserve ─webhook─▶ API: check token and payload ─▶ NATS <prefix>.intake.<tenant>  (Nats-Msg-Id = intake id)
+                                                            │ durable "triage" consumer (worker)
+                                       triage in Postgres: signal keyed by (intake id, row) ─▶ case
+                                                            │ start CaseWorkflow "case-<id>" (idempotent)
+Temporal CaseWorkflow:  diagnose ─▶ dry run (poll) ─▶ wait for "decide" update ─▶ live run (poll) ─▶ end
+                          │ reads Neo4j            ▲ console approve/reject            │
+                          ▼                        │ (validator refuses stale ones)    ▼
+                     Postgres: case, proposal, ledger ─── relay ──▶ NATS <prefix>.events.<tenant>.<kind>
+```
+
 ## Decisions
 
-**1. One Postgres for the first slice, not Postgres plus Neo4j, NATS and Temporal.**
-At reference-customer scale (about 300 servers, 50 apps, a few thousand graph edges per customer) a
-recursive query answers neighbourhood questions in milliseconds, and a job table handles a few hundred
-cases a day. Three extra services would each need running, patching, backing up and securing per platform
-instance before they do anything Postgres can't. The seams are in place (`estate.py`, `jobs.py`,
-the webhook) so each can be swapped without touching callers. Add them when:
-- **Neo4j**: graph queries span customers' full estates or need path algorithms (blast radius across
-  thousands of nodes), or queries pass about 100 ms.
-- **Temporal**: workflows wait days (change windows, customer replies) or need timers and compensation.
-- **NATS**: more than one consumer needs the same events (forecast agent, SLA clocks, the reporter).
+**1. Neo4j, NATS and Temporal from the first slice, all free editions.**
+We chose to run them from the start rather than add them later behind seams. What each one carries now:
+- **Temporal** holds every wait in a case: Semaphore polls, and an approval that may take hours (it
+  escalates after `APPROVAL_TIMEOUT_HOURS`, 72 by default). A worker restart loses nothing, a failing step
+  is retried and then escalated rather than left stuck, and the Temporal UI shows each case step by step.
+  Approvals are a Workflow Update whose validator refuses a proposal that isn't waiting, so a double click
+  or a stale console can't approve twice. Steps are written to be safe to run twice.
+- **NATS JetStream** decouples intake from processing: the API answers OpenObserve at once and an alert
+  storm queues instead of hitting Postgres. Publishing with the intake id as `Nats-Msg-Id` and keying
+  signals by (intake id, row) means a retry or redelivery adds nothing. Every ledger entry is relayed to
+  an events stream, so later consumers react to cases without polling the database.
+- **Neo4j Community** holds the estate graph. Community has one database and no per-database access
+  control, so isolation is in `estate.py`: every node carries `tenant_id`, every query matches on it, and
+  agents only reach the graph through two fixed queries.
+
+Postgres stays the system of record (cases, proposals, the ledger, AI usage) and also stores Temporal's
+own data, so there is still one database to back up. Costs to watch: three more services to patch and
+monitor per platform instance; Neo4j is the largest at about half a gigabyte.
 
 **2. Claude API with our own tools, not the Claude Agent SDK, for operations agents.**
 The Agent SDK is Claude Code as a library: a strong harness, but it brings shell and file tools. An agent

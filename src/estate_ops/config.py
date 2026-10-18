@@ -24,6 +24,15 @@ class Settings:
     openobserve_url: str
     openobserve_user: str | None
     openobserve_password: str | None
+    neo4j_url: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str | None = None
+    nats_url: str = "nats://localhost:4222"
+    # Prefix for NATS subjects and stream names, so several platform instances (or test runs) can share a server.
+    nats_prefix: str = "estate"
+    temporal_address: str = "localhost:7233"
+    temporal_namespace: str = "default"
+    task_queue: str = "estate-cases"
     # Per-agent models. Opus at low effort for diagnosis; change per tenant workload once measured.
     diagnosis_model: str = "claude-opus-5-5"
     diagnosis_effort: str = "low"
@@ -38,6 +47,8 @@ class Settings:
     )
     run_poll_seconds: float = 3.0
     run_timeout_seconds: float = 1800.0
+    # An approval nobody answers escalates the case after this long.
+    approval_timeout_hours: float = 72.0
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -57,5 +68,14 @@ class Settings:
             openobserve_password=_env("OPENOBSERVE_PASSWORD"),
             diagnosis_model=_env("DIAGNOSIS_MODEL", "claude-opus-5-5"),
             diagnosis_effort=_env("DIAGNOSIS_EFFORT", "low"),
+            neo4j_url=_env("NEO4J_URL", "bolt://localhost:7687"),
+            neo4j_user=_env("NEO4J_USER", "neo4j"),
+            neo4j_password=_env("NEO4J_PASSWORD"),
+            nats_url=_env("NATS_URL", "nats://localhost:4222"),
+            nats_prefix=_env("NATS_PREFIX", "estate"),
+            temporal_address=_env("TEMPORAL_ADDRESS", "localhost:7233"),
+            temporal_namespace=_env("TEMPORAL_NAMESPACE", "default"),
+            task_queue=_env("TEMPORAL_TASK_QUEUE", "estate-cases"),
             run_poll_seconds=float(_env("RUN_POLL_SECONDS", "3")),
+            approval_timeout_hours=float(_env("APPROVAL_TIMEOUT_HOURS", "72")),
         )

@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import signal
 import sys
-import time
 
-import psycopg
-
-from . import db, estate, jobs
+from . import db
 from .config import Settings
+from .estate import EstateGraph
 from .tenancy import Tenants
 
 log = logging.getLogger("estate_ops")
@@ -20,15 +19,20 @@ log = logging.getLogger("estate_ops")
 def cmd_migrate(settings: Settings) -> None:
     applied = db.migrate(settings.database_url)
     Tenants.load(settings.tenants_file).sync(settings.database_url)
-    print(f"migrations applied: {applied or 'none'}; tenants synced")
+    graph = EstateGraph(settings.neo4j_url, settings.neo4j_user, settings.neo4j_password)
+    graph.ensure_schema()
+    graph.close()
+    print(f"migrations applied: {applied or 'none'}; tenants synced; graph schema ensured")
 
 
 def cmd_seed(settings: Settings) -> None:
     if not settings.seed_file:
         print("no SEED_FILE set")
         return
-    with psycopg.connect(settings.database_url) as conn:
-        n = estate.load_seed(conn, settings.seed_file)
+    graph = EstateGraph(settings.neo4j_url, settings.neo4j_user, settings.neo4j_password)
+    graph.ensure_schema()
+    n = graph.load_seed(settings.seed_file)
+    graph.close()
     print(f"seeded {n} assets from {settings.seed_file}")
 
 
@@ -42,28 +46,19 @@ def cmd_api(settings: Settings, host: str, port: int) -> None:
 
 
 def cmd_worker(settings: Settings) -> None:
+    from . import worker
     from .app import build
 
     platform = build(settings)
-    stop = False
 
-    def _stop(*_):
-        nonlocal stop
-        stop = True
+    async def _run() -> None:
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, stop.set)
+        await worker.run(platform, stop)
 
-    signal.signal(signal.SIGTERM, _stop)
-    signal.signal(signal.SIGINT, _stop)
-    log.info("worker started (model: %s)", settings.diagnosis_model if platform.anthropic else "none, deterministic only")
-    while not stop:
-        job = jobs.claim(platform.db)
-        if job is None:
-            time.sleep(1.0)
-            continue
-        try:
-            log.info("job %s %s %s", job["id"], job["kind"], platform.handle(job))
-        except Exception as exc:
-            retry = jobs.fail(platform.db, job, f"{type(exc).__name__}: {exc}")
-            log.exception("job %s %s failed (%s)", job["id"], job["kind"], "will retry" if retry else "giving up")
+    asyncio.run(_run())
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -16,9 +16,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from .. import estate
 from ..catalog import Catalog
 from ..config import Settings
+from ..estate import EstateGraph
 from ..telemetry import OpenObserve
 
 SYSTEM = """You are the diagnosis agent of a managed IT operations service. A monitoring alert has opened a case \
@@ -169,7 +169,7 @@ class CaseContext:
     graph: dict[str, Any] | None
 
 
-def build_context(conn, catalog: Catalog, tenant, case: dict[str, Any]) -> CaseContext:
+def build_context(conn, catalog: Catalog, tenant, case: dict[str, Any], graph: EstateGraph) -> CaseContext:
     first = conn.execute("SELECT alert_id, labels FROM signals WHERE case_id = %s ORDER BY id LIMIT 1", (case["id"],)).fetchone()
     alert_id, labels = first["alert_id"], first["labels"]
     spec = catalog.alert(alert_id)
@@ -178,11 +178,11 @@ def build_context(conn, catalog: Catalog, tenant, case: dict[str, Any]) -> CaseC
         for param, column in spec.runbook_params.items():
             if param != "rb_targets" and labels.get(column) not in (None, ""):
                 mapped[param] = labels[column]
-    graph = None
+    neighbourhood = None
     if case.get("target"):
-        host = estate.host_asset(conn, tenant.id, case["target"])
+        host = graph.host(tenant.id, case["target"])
         if host:
-            graph = estate.neighbourhood(conn, tenant.id, host["id"], hops=3)
+            neighbourhood = graph.neighbourhood(tenant.id, host["id"], hops=3)
     return CaseContext(
         tenant_id=tenant.id,
         openobserve_org=tenant.openobserve_org,
@@ -191,7 +191,7 @@ def build_context(conn, catalog: Catalog, tenant, case: dict[str, Any]) -> CaseC
         labels=labels,
         candidates=catalog.runbooks_for_alert(alert_id),
         mapped_params=mapped,
-        graph=graph,
+        graph=neighbourhood,
     )
 
 
@@ -252,14 +252,14 @@ def deterministic(ctx: CaseContext, catalog: Catalog, note: str | None = None) -
 class ToolBox:
     """The read-only tools, bound to one tenant. Every call is scoped by that tenant's id and org."""
 
-    def __init__(self, conn, ctx: CaseContext, telemetry: OpenObserve | None):
-        self.conn, self.ctx, self.telemetry = conn, ctx, telemetry
+    def __init__(self, graph: EstateGraph, ctx: CaseContext, telemetry: OpenObserve | None):
+        self.graph, self.ctx, self.telemetry = graph, ctx, telemetry
         self.calls: list[dict[str, Any]] = []
 
     def run(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:
         try:
             if name == "estate_neighbourhood":
-                result = estate.neighbourhood(self.conn, self.ctx.tenant_id, str(args["asset_id"]), int(args["hops"]))
+                result = self.graph.neighbourhood(self.ctx.tenant_id, str(args["asset_id"]), int(args["hops"]))
                 if len(result["assets"]) == 0:
                     result = {"error": f"no asset {args['asset_id']} in this customer's estate"}
             elif name == "metric_series":

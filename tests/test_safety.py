@@ -17,11 +17,10 @@ CATALOG = Catalog.load(ROOT / "tests/fixtures/catalog.json")
 def test_row_level_security_hides_other_customers(make_platform):
     platform = make_platform()
     with platform.db.scope("lab") as conn:
-        triage.ingest(conn, "lab", CATALOG, SQL_ALERT)
+        triage.ingest(conn, "lab", CATALOG, SQL_ALERT, "intake-1")
     with platform.db.scope("contoso") as conn:
         assert conn.execute("SELECT count(*) AS n FROM cases").fetchone()["n"] == 0
         assert conn.execute("SELECT count(*) AS n FROM ledger").fetchone()["n"] == 0
-        assert conn.execute("SELECT count(*) AS n FROM assets WHERE tenant_id = 'lab'").fetchone()["n"] == 0
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute(
                 "INSERT INTO cases (tenant_id, ref, title, severity, status, fingerprint) "
@@ -33,10 +32,18 @@ def test_row_level_security_hides_other_customers(make_platform):
         assert conn.execute("SELECT count(*) AS n FROM cases").fetchone()["n"] == 1
 
 
+def test_estate_graph_is_scoped_to_one_customer(graph):
+    assert graph.host("lab", "lab-sql01")["id"] == "host:lab-sql01"
+    assert graph.host("contoso", "lab-sql01") is None
+    assert graph.neighbourhood("contoso", "host:lab-sql01")["assets"] == []
+    lab = graph.neighbourhood("lab", "host:lab-sql01", hops=4)
+    assert lab["assets"] and all(not a["id"].startswith("host:cto-") for a in lab["assets"])
+
+
 def test_ledger_is_append_only_and_tamper_evident(make_platform, database_url):
     platform = make_platform()
     with platform.db.scope("lab") as conn:
-        triage.ingest(conn, "lab", CATALOG, SQL_ALERT)
+        triage.ingest(conn, "lab", CATALOG, SQL_ALERT, "intake-1")
         ledger.append(conn, "lab", None, "test", "note", {"n": 1})
     with platform.db.scope("lab") as conn, pytest.raises(psycopg.errors.InsufficientPrivilege):
         conn.execute("UPDATE ledger SET body = '{}'")

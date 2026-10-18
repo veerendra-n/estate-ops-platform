@@ -1,16 +1,27 @@
-# Local stack: Postgres, the API with the console, the worker, and fakes for Semaphore and OpenObserve.
-# Copy .env.example to .env first. For a lab with real Semaphore and OpenObserve, see docs/running.md.
+# Local stack: Postgres, Neo4j Community, NATS JetStream, Temporal (with its web UI), the API with the
+# console, the worker, and fakes for Semaphore and OpenObserve. Copy .env.example to .env first.
+# Memory limits are sized for a laptop and for one small platform instance; raise them per real load.
 x-platform: &platform
   build: .
   image: estate-ops-platform:dev
   env_file: .env
   environment:
     DATABASE_URL: postgresql://estate:${POSTGRES_PASSWORD:?set it in .env}@postgres:5432/estate_ops
+    NEO4J_URL: bolt://neo4j:7687
+    NEO4J_USER: neo4j
+    NEO4J_PASSWORD: ${NEO4J_PASSWORD:?set it in .env}
+    NATS_URL: nats://nats:4222
+    TEMPORAL_ADDRESS: temporal:7233
     SEMAPHORE_URL: ${SEMAPHORE_URL:-http://fakes:8090/semaphore}
     OPENOBSERVE_URL: ${OPENOBSERVE_URL:-http://fakes:8090/openobserve}
   depends_on:
     migrate:
       condition: service_completed_successfully
+    nats:
+      condition: service_started
+    temporal:
+      condition: service_healthy
+  mem_limit: 512m
 
 services:
   postgres:
@@ -25,12 +36,66 @@ services:
       test: ["CMD-SHELL", "pg_isready -U estate -d estate_ops"]
       interval: 2s
       retries: 30
+    mem_limit: 512m
+
+  neo4j:
+    image: neo4j:5.26.32-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?set it in .env}
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 256m
+    volumes:
+      - neo4jdata:/data
+    ports:
+      - "127.0.0.1:7474:7474"   # Neo4j Browser, to look at the estate graph
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null"]
+      interval: 3s
+      retries: 40
+    mem_limit: 1g
+
+  nats:
+    image: nats:2.11-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    volumes:
+      - natsdata:/data
+    mem_limit: 256m
+
+  temporal:
+    # Temporal server on the same Postgres (its own temporal and temporal_visibility databases).
+    image: temporalio/auto-setup:1.28.1
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: estate
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:?set it in .env}
+      POSTGRES_SEEDS: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "temporal operator cluster health --address $(hostname -i):7233 | grep -q SERVING"]
+      interval: 3s
+      retries: 60
+    mem_limit: 768m
+
+  temporal-ui:
+    image: temporalio/ui:2.37.0
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "127.0.0.1:8233:8080"   # every case's workflow, step by step
+    depends_on:
+      - temporal
+    mem_limit: 256m
 
   migrate:
     <<: *platform
     entrypoint: ["sh", "-c", "python -m estate_ops migrate && python -m estate_ops seed"]
     depends_on:
       postgres:
+        condition: service_healthy
+      neo4j:
         condition: service_healthy
 
   api:
@@ -49,6 +114,9 @@ services:
     entrypoint: ["uvicorn", "dev.fakes:app", "--host", "0.0.0.0", "--port", "8090"]
     ports:
       - "127.0.0.1:8090:8090"
+    mem_limit: 256m
 
 volumes:
   pgdata:
+  neo4jdata:
+  natsdata:

@@ -1,9 +1,17 @@
-"""HTTP API: alert intake for OpenObserve, case and approval endpoints for the console."""
+"""HTTP API: alert intake for OpenObserve, case and approval endpoints for the console.
+
+Intake checks the webhook and queues it on NATS, so it answers fast and keeps working while Postgres or
+the worker is busy. Approvals go to the case's Temporal workflow as a "decide" update, which refuses a
+proposal that is not waiting for a decision; the API never writes a decision itself.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import os
+import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -11,9 +19,13 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from temporalio.client import WorkflowUpdateFailedError
+from temporalio.service import RPCError
 
 from . import budget, ledger, triage
-from .service import Platform, WorkflowError
+from .bus import Bus
+from .service import Platform
+from .workflows import CaseWorkflow, DecideInput, workflow_id
 
 CONSOLE_DIR = Path(__file__).resolve().parents[2] / "console"
 
@@ -30,7 +42,18 @@ def _bearer(authorization: str | None) -> str | None:
 
 
 def create_app(platform: Platform) -> FastAPI:
-    app = FastAPI(title="Estate Ops Platform", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        from .worker import temporal_client
+
+        s = platform.settings
+        app.state.bus = await Bus.connect(s.nats_url, s.nats_prefix)
+        await app.state.bus.ensure_streams()
+        app.state.temporal = await temporal_client(platform)
+        yield
+        await app.state.bus.close()
+
+    app = FastAPI(title="Estate Ops Platform", version="0.2.0", lifespan=lifespan)
     app.state.platform = platform
 
     def console_auth(authorization: str | None = Header(default=None)) -> None:
@@ -64,11 +87,12 @@ def create_app(platform: Platform) -> FastAPI:
         if not isinstance(payload, dict):
             raise HTTPException(422, "expected a JSON object")
         try:
-            with platform.db.scope(tenant_id) as conn:
-                results = triage.ingest(conn, tenant_id, platform.catalog, payload)
+            triage.check(tenant_id, payload)
         except triage.IntakeError as exc:
             raise HTTPException(422, str(exc)) from None
-        return {"cases": [{"case_id": r.case_id, "ref": r.ref, "new": r.new, "target": r.target} for r in results]}
+        intake_id = str(uuid.uuid4())
+        await app.state.bus.publish_intake(tenant_id, intake_id, payload)
+        return {"intake_id": intake_id}
 
     @app.get("/api/v1/cases", dependencies=[Depends(console_auth)])
     def list_cases(status: str | None = None, tenant: str | None = None) -> list[dict[str, Any]]:
@@ -109,23 +133,44 @@ def create_app(platform: Platform) -> FastAPI:
                 ),
             }
 
-    def _decide(proposal_id: str, body: Decision, approve: bool) -> dict[str, Any]:
-        with platform.db.scope(engineer_scope()) as conn:
-            row = conn.execute("SELECT tenant_id FROM proposals WHERE id = %s", (proposal_id,)).fetchone()
+    async def _decide(proposal_id: str, body: Decision, approve: bool) -> dict[str, Any]:
+        try:
+            uuid.UUID(proposal_id)
+        except ValueError:
+            raise HTTPException(404, "no such proposal") from None
+        if not body.who.strip():
+            raise HTTPException(422, "a decision needs a named engineer")
+
+        def lookup():
+            with platform.db.scope(engineer_scope()) as conn:
+                return conn.execute("SELECT case_id, status FROM proposals WHERE id = %s", (proposal_id,)).fetchone()
+
+        row = await asyncio.to_thread(lookup)
         if row is None:
             raise HTTPException(404, "no such proposal")
-        try:
-            return platform.decide(row["tenant_id"], proposal_id, approve, body.who, body.note)
-        except WorkflowError as exc:
-            raise HTTPException(409, str(exc)) from None
+        handle = app.state.temporal.get_workflow_handle(workflow_id(str(row["case_id"])))
+        for _ in range(30):
+            try:
+                result = await handle.execute_update(CaseWorkflow.decide, DecideInput(proposal_id, approve, body.who, body.note))
+                return {"proposal_id": result["proposal_id"], "status": result["status"]}
+            except WorkflowUpdateFailedError as exc:
+                reason = getattr(exc.cause, "message", None) or "this proposal cannot be decided"
+            except RPCError:
+                reason = "this case is no longer waiting for a decision"
+            # The proposal can be marked awaiting a moment before its workflow starts waiting; retry briefly.
+            row = await asyncio.to_thread(lookup)
+            if row["status"] != "awaiting_approval":
+                break
+            await asyncio.sleep(0.1)
+        raise HTTPException(409, reason)
 
     @app.post("/api/v1/proposals/{proposal_id}/approve", dependencies=[Depends(console_auth)])
-    def approve(proposal_id: str, body: Decision) -> dict[str, Any]:
-        return _decide(proposal_id, body, True)
+    async def approve(proposal_id: str, body: Decision) -> dict[str, Any]:
+        return await _decide(proposal_id, body, True)
 
     @app.post("/api/v1/proposals/{proposal_id}/reject", dependencies=[Depends(console_auth)])
-    def reject(proposal_id: str, body: Decision) -> dict[str, Any]:
-        return _decide(proposal_id, body, False)
+    async def reject(proposal_id: str, body: Decision) -> dict[str, Any]:
+        return await _decide(proposal_id, body, False)
 
     @app.get("/api/v1/tenants", dependencies=[Depends(console_auth)])
     def tenants() -> list[dict[str, Any]]:

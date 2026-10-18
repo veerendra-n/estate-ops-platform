@@ -57,7 +57,7 @@ class Database:
 
     @contextmanager
     def unscoped(self) -> Iterator[psycopg.Connection]:
-        """For the job queue and tenant list only; tenant tables return nothing here."""
+        """For the tenant list only; tenant tables return nothing here."""
         with self.pool.connection() as conn:
             with conn.transaction():
                 conn.execute("SELECT set_config('app.tenants', '', true)")

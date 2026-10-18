@@ -1,4 +1,5 @@
--- First schema: tenants, estate graph, signals, cases, proposals, the action ledger, AI usage and a job queue.
+-- First schema: tenants, signals, cases, proposals, the action ledger and AI usage. The estate graph is in
+-- Neo4j and the case workflow in Temporal.
 -- Every tenant-owned table carries tenant_id and is protected by row-level security keyed on the
 -- session setting app.tenants (a comma-separated list the API or worker sets per transaction).
 -- The application connects as estate_app, which owns nothing and so cannot bypass the policies.
@@ -12,28 +13,7 @@ CREATE TABLE tenants (
     created_at            timestamptz NOT NULL DEFAULT now()
 );
 
--- Estate graph as two tables. Neo4j can replace this later behind estate.py without touching callers.
-CREATE TABLE assets (
-    tenant_id   text NOT NULL REFERENCES tenants(id),
-    id          text NOT NULL,
-    kind        text NOT NULL,
-    name        text NOT NULL,
-    attrs       jsonb NOT NULL DEFAULT '{}'::jsonb,
-    source      text NOT NULL,
-    seen_at     timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (tenant_id, id)
-);
-
-CREATE TABLE relations (
-    tenant_id   text NOT NULL,
-    src         text NOT NULL,
-    rel         text NOT NULL,
-    dst         text NOT NULL,
-    source      text NOT NULL,
-    PRIMARY KEY (tenant_id, src, rel, dst),
-    FOREIGN KEY (tenant_id, src) REFERENCES assets(tenant_id, id),
-    FOREIGN KEY (tenant_id, dst) REFERENCES assets(tenant_id, id)
-);
+-- The estate graph lives in Neo4j (estate.py); cases refer to assets by their id.
 
 CREATE SEQUENCE case_ref_seq;
 
@@ -62,6 +42,8 @@ CREATE TABLE signals (
     tenant_id    text NOT NULL REFERENCES tenants(id),
     case_id      uuid REFERENCES cases(id),
     source       text NOT NULL,
+    intake_id    text NOT NULL,
+    row_no       integer NOT NULL,
     alert_id     text NOT NULL,
     fingerprint  text NOT NULL,
     target       text,
@@ -69,6 +51,8 @@ CREATE TABLE signals (
     received_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX signals_case ON signals (case_id);
+-- A redelivered intake message folds into nothing: each (intake, row) is stored once.
+CREATE UNIQUE INDEX signals_once ON signals (tenant_id, intake_id, row_no);
 
 CREATE TABLE proposals (
     id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -130,26 +114,18 @@ CREATE TABLE ai_usage (
 );
 CREATE INDEX ai_usage_tenant_month ON ai_usage (tenant_id, at);
 
--- Durable job queue (FOR UPDATE SKIP LOCKED). Temporal replaces this when workflows outgrow it.
--- Not under row-level security: the worker claims jobs for every tenant, then works inside one tenant.
-CREATE TABLE jobs (
-    id          bigserial PRIMARY KEY,
-    tenant_id   text NOT NULL REFERENCES tenants(id),
-    kind        text NOT NULL,
-    payload     jsonb NOT NULL,
-    status      text NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'done', 'failed')),
-    attempts    integer NOT NULL DEFAULT 0,
-    run_after   timestamptz NOT NULL DEFAULT now(),
-    last_error  text,
-    created_at  timestamptz NOT NULL DEFAULT now(),
+-- Where the NATS relay has got to in the ledger (one row per relay). Case events are published from
+-- the ledger after commit, so a crash between commit and publish only delays an event, never loses it.
+CREATE TABLE relay_cursor (
+    name        text PRIMARY KEY,
+    last_id     bigint NOT NULL DEFAULT 0,
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX jobs_ready ON jobs (run_after) WHERE status = 'queued';
 
 DO $$
 DECLARE t text;
 BEGIN
-    FOREACH t IN ARRAY ARRAY['assets', 'relations', 'cases', 'signals', 'proposals', 'ledger', 'ai_usage']
+    FOREACH t IN ARRAY ARRAY['cases', 'signals', 'proposals', 'ledger', 'ai_usage']
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
         EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
@@ -168,6 +144,7 @@ BEGIN
 END $$;
 GRANT USAGE ON SCHEMA public TO estate_app;
 GRANT SELECT ON tenants TO estate_app;
-GRANT SELECT, INSERT, UPDATE ON assets, relations, cases, signals, proposals, jobs TO estate_app;
+GRANT SELECT, INSERT, UPDATE ON cases, signals, proposals TO estate_app;
+GRANT SELECT, INSERT, UPDATE ON relay_cursor TO estate_app;
 GRANT SELECT, INSERT ON ledger, ai_usage TO estate_app;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO estate_app;

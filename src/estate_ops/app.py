@@ -7,6 +7,7 @@ import os
 from .catalog import Catalog
 from .config import Settings
 from .db import Database
+from .estate import EstateGraph
 from .semaphore import Semaphore
 from .service import Platform
 from .telemetry import OpenObserve
@@ -27,6 +28,7 @@ def build(settings: Settings | None = None, **overrides) -> Platform:
     parts = {
         "settings": settings,
         "db": Database(settings.database_url),
+        "graph": EstateGraph(settings.neo4j_url, settings.neo4j_user, settings.neo4j_password),
         "tenants": Tenants.load(settings.tenants_file),
         "catalog": Catalog.load(settings.catalog_file, settings.alerts_dir),
         "semaphore": Semaphore(settings.semaphore_url, settings.semaphore_token),

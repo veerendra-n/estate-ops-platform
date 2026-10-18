@@ -19,10 +19,28 @@ jobs:
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 2s --health-retries 30
+      neo4j:
+        image: neo4j:5.26.32-community
+        env:
+          NEO4J_AUTH: neo4j/ci-only-password
+        ports: ["7687:7687"]
     env:
       TEST_DATABASE_URL: postgresql://postgres:ci-only@localhost:5432/postgres
+      TEST_NEO4J_URL: bolt://localhost:7687
+      TEST_NEO4J_PASSWORD: ci-only-password
+      TEST_NATS_URL: nats://localhost:4222
+      TEST_TEMPORAL_ADDRESS: localhost:7233
     steps:
       - uses: actions/checkout@v4
+      # Service containers can't take a command, so NATS (JetStream on) and the Temporal dev server run here.
+      - run: docker run -d --name nats -p 4222:4222 nats:2.11-alpine -js
+      - run: docker run -d --name temporal -p 7233:7233 temporalio/temporal:1.9.1 server start-dev --ip 0.0.0.0
+      - name: Wait for Neo4j, NATS and Temporal
+        run: |
+          for port in 7687 4222 7233; do
+            timeout 120 bash -c "until (echo > /dev/tcp/localhost/$port) 2>/dev/null; do sleep 1; done"
+          done
+          timeout 120 bash -c 'until docker exec temporal temporal operator cluster health 2>/dev/null | grep -q SERVING; do sleep 1; done'
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
