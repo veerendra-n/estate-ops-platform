@@ -65,6 +65,11 @@ The case appears under *Needs attention* with a dry run ready to approve. Approv
 `python dev/fire_alert.py print-spooler-stopped lab-prt01` shows a low-risk runbook; an unknown alert
 id shows an escalation.
 
+## Install on a server
+
+One VM (2 vCPU, 4 GB) runs everything behind HTTPS: `sudo DOMAIN=ops.example.net ./deploy/install.sh`.
+See [docs/deploy.md](docs/deploy.md).
+
 ## Develop
 
 ```sh
@@ -101,7 +106,8 @@ workflow are part of what they test. The defaults match the commands above; `TES
 | `console/` | The engineer console (plain HTML and JS, served by the API) |
 | `config/` | Customers and the lab estate seed. No secrets: tokens are named by environment variable |
 | `dev/` | Fakes, a sample alert sender, the catalog refresher |
-| `docs/` | [Architecture and decisions](docs/architecture.md), [integrations to confirm](docs/integrations.md) |
+| `deploy/` | Production stack for one VM: Caddy HTTPS, install, backup and restore scripts |
+| `docs/` | [Architecture and decisions](docs/architecture.md), [integrations to confirm](docs/integrations.md), [installing an instance](docs/deploy.md) |
 
 ## Secrets
 

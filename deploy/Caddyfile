@@ -1,0 +1,17 @@
+# HTTPS for the console and the OpenObserve intake. Caddy gets and renews a Let's Encrypt certificate for
+# DOMAIN by itself (ports 80 and 443 must reach this VM); for "localhost" it uses its own local CA.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	reverse_proxy api:8080
+}

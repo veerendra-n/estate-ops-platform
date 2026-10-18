@@ -54,6 +54,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t estate-ops-platform:ci .
+      - name: Check the production stack and scripts
+        run: |
+          bash -n deploy/install.sh deploy/backup.sh deploy/restore.sh
+          shellcheck deploy/*.sh
+          touch deploy/.env
+          DOMAIN=ci.example.net POSTGRES_PASSWORD=x NEO4J_PASSWORD=x docker compose -f deploy/compose.yaml config -q
 
   secrets:
     runs-on: ubuntu-latest
