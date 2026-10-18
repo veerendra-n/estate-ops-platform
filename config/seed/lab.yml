@@ -1,0 +1,26 @@
+# Fictitious estate for the lab tenant, matching ops-foundation customers/lab/inventory.
+# In production the estate graph is filled by discovery (NetBox, hypervisor and cloud APIs, OpenObserve);
+# this file stands in for that until the discovery jobs exist.
+tenant: lab
+source: seed
+assets:
+  - { id: app:finance-erp, kind: application, name: Finance ERP, attrs: { owner: Finance, tier: business-critical, users: 420 } }
+  - { id: db:lab-sql01/FinanceERP, kind: database, name: FinanceERP, attrs: { engine: sqlserver, recovery_model: FULL, size_gb: 180 } }
+  - { id: sqlinstance:lab-sql01/MSSQLSERVER, kind: sql_instance, name: lab-sql01 default instance, attrs: { version: "SQL Server 2019 CU28" } }
+  - { id: host:lab-sql01, kind: server, name: lab-sql01, attrs: { os: Windows Server 2022, ip: 10.20.0.11, group: sql_servers } }
+  - { id: host:lab-prt01, kind: server, name: lab-prt01, attrs: { os: Windows Server 2022, ip: 10.20.0.21, group: print_servers } }
+  - { id: host:lab-dc01, kind: server, name: lab-dc01, attrs: { os: Windows Server 2022, ip: 10.20.0.5, group: ad_pdc } }
+  - { id: host:lab-app01, kind: server, name: lab-app01, attrs: { os: Windows Server 2022, ip: 10.20.0.31, group: vmware_guests } }
+  - { id: hv:esx-lab-01, kind: hypervisor_host, name: esx-lab-01, attrs: { vendor: VMware, version: "8.0 U3" } }
+  - { id: ds:ds-lab-01, kind: datastore, name: ds-lab-01, attrs: { capacity_gb: 4096, free_pct: 31 } }
+  - { id: backup:veeam-sql-nightly, kind: backup_job, name: Veeam SQL nightly, attrs: { tool: Veeam, log_backups: false } }
+  - { id: job:lab-sql01/LogBackup-FinanceERP, kind: sql_agent_job, name: LogBackup - FinanceERP, attrs: { schedule: every 15 minutes } }
+relations:
+  - [app:finance-erp, depends_on, db:lab-sql01/FinanceERP]
+  - [db:lab-sql01/FinanceERP, hosted_on, sqlinstance:lab-sql01/MSSQLSERVER]
+  - [sqlinstance:lab-sql01/MSSQLSERVER, runs_on, host:lab-sql01]
+  - [host:lab-sql01, runs_on, hv:esx-lab-01]
+  - [host:lab-app01, runs_on, hv:esx-lab-01]
+  - [hv:esx-lab-01, stores_on, ds:ds-lab-01]
+  - [backup:veeam-sql-nightly, protects, host:lab-sql01]
+  - [job:lab-sql01/LogBackup-FinanceERP, backs_up_log_of, db:lab-sql01/FinanceERP]

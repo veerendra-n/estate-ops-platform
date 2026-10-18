@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "estate-ops-platform"
+version = "0.1.0"
+description = "Agents that diagnose and fix customer estates through ops-foundation runbooks"
+requires-python = ">=3.12"
+dependencies = [
+  "anthropic>=1.15,<2",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "psycopg[binary]>=3.2",
+  "psycopg-pool>=3.2",
+  "httpx>=0.27",
+  "pyyaml>=6",
+  "pydantic>=2.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+estate_ops = ["migrations/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests", "."]
+
+[tool.ruff]
+line-length = 130
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+# S101 asserts in tests; S104 the API binds 0.0.0.0 inside its container;
+# S608 telemetry.py builds SQL only from identifiers it has validated.
+ignore = ["S101", "S104", "S608"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106"]
+"dev/*" = ["S311", "E501"]

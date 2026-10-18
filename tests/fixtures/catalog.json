@@ -1,0 +1,351 @@
+{
+  "schema": "ops-foundation/catalog/v1",
+  "commit": "fc7e39765d67bf0d5752c748e6d8710ce04c5f00",
+  "runbooks": [
+    {
+      "id": "endpoint/clear-teams-cache",
+      "version": "1.0.0",
+      "title": "Clear the Microsoft Teams cache on a user's laptop",
+      "domain": "endpoint",
+      "summary": "For \"Teams won't load, sign in or show messages\" calls. Finds the user's Windows laptop in Intune and runs the Teams cache remediation on demand. The remediation closes Teams, clears the new and classic Teams caches for the signed-in user and starts Teams again. Offline, stale or non-Windows devices are escalated.",
+      "executor": "intune",
+      "targets": {
+        "platform": "api",
+        "group": "graph_api",
+        "delegate": "localhost"
+      },
+      "risk": "low",
+      "approval": "not_required",
+      "max_targets": 1,
+      "params": [
+        {
+          "name": "rb_device_name",
+          "type": "string",
+          "required": true,
+          "description": "Intune device name of the user's laptop, e.g. LT-04231."
+        },
+        {
+          "name": "rb_max_sync_age_hours",
+          "type": "integer",
+          "required": false,
+          "default": 24,
+          "description": "Escalate when the device has not checked in to Intune for longer than this."
+        }
+      ],
+      "outcomes": [
+        "escalate",
+        "run_remediation"
+      ],
+      "rollback": "None needed. Teams rebuilds its cache on next start; the user may need to sign in again.",
+      "triggers": [
+        "service-desk-teams-not-loading"
+      ],
+      "secrets": [
+        "Entra app client secret for the customer's tenant, DeviceManagementManagedDevices.PrivilegedOperations.All and DeviceManagementManagedDevices.Read.All (OpenBao, per tenant)"
+      ],
+      "notes": "The remediation package (scripts/detect.ps1, scripts/remediate.ps1) is uploaded to each customer's Intune once at onboarding, set to run as the logged-on user, and its id stored as customer_teams_remediation_id. For laptops managed by Level instead of Intune, the same remediate.ps1 is imported into Level as a script; triggering it from here waits on confirming Level's API (see docs/integrations.md).",
+      "playbook": "ansible/runbooks/endpoint/clear-teams-cache/runbook.yml"
+    },
+    {
+      "id": "identity/unlock-account",
+      "version": "1.0.0",
+      "title": "Unlock a locked Active Directory account",
+      "domain": "identity",
+      "summary": "Checks why an on-premises AD account is locked and unlocks it when it is safe. Runs on the PDC emulator, reads the lockout events for the last 24 hours and reports which computers caused them. Disabled, privileged and repeatedly locked accounts are escalated instead of unlocked.",
+      "executor": "ansible-winrm",
+      "targets": {
+        "platform": "windows",
+        "group": "ad_pdc"
+      },
+      "risk": "low",
+      "approval": "required",
+      "max_targets": 1,
+      "params": [
+        {
+          "name": "rb_username",
+          "type": "string",
+          "required": true,
+          "description": "sAMAccountName of the user, e.g. anna.berg."
+        },
+        {
+          "name": "rb_max_lockouts",
+          "type": "integer",
+          "required": false,
+          "default": 5,
+          "description": "Lockouts in 24 hours at or above which we escalate (stale credentials or an attack)."
+        }
+      ],
+      "outcomes": [
+        "none",
+        "escalate",
+        "unlock"
+      ],
+      "rollback": "Lock or disable the account again in AD if the unlock was requested by someone who was not the user.",
+      "triggers": [
+        "service-desk-account-locked",
+        "ad-account-locked-out"
+      ],
+      "secrets": [
+        "WinRM credential with the delegated \"unlock account\" right only, not Domain Admin (OpenBao, per tenant)"
+      ],
+      "notes": "The approval reference is the ticket in which the service desk verified the caller's identity; that check is what stops social engineering, so the guard refuses a live run without it. Cloud-only Entra accounts are not covered: Entra smart lockout clears on its own and needs no unlock.",
+      "playbook": "ansible/runbooks/identity/unlock-account/runbook.yml"
+    },
+    {
+      "id": "sql/log-backup-shrink",
+      "version": "1.0.0",
+      "title": "Free a full SQL Server transaction log",
+      "domain": "database",
+      "summary": "Finds out why a database log cannot be reused. When it is only waiting for a log backup, takes one (natively or by starting the customer's own SQL Agent job) and optionally shrinks the log file back to a target size. Anything else holding the log (open transaction, replication, AG replica) is escalated.",
+      "executor": "ansible-winrm",
+      "targets": {
+        "platform": "windows",
+        "group": "sql_servers"
+      },
+      "risk": "medium",
+      "approval": "required",
+      "max_targets": 1,
+      "params": [
+        {
+          "name": "rb_sql_instance",
+          "type": "string",
+          "required": false,
+          "default": ".",
+          "description": "SQL Server instance on the target, e.g. \".\" or \".\\\\SQL2019\"."
+        },
+        {
+          "name": "rb_database",
+          "type": "string",
+          "required": true,
+          "description": "Database whose log is full."
+        },
+        {
+          "name": "rb_backup_mode",
+          "type": "enum",
+          "required": false,
+          "default": "agent_job",
+          "choices": [
+            "agent_job",
+            "native"
+          ],
+          "description": "agent_job starts the customer's existing log backup job so the backup chain stays in their tool. native writes a log backup to rb_backup_path; use only where we own SQL backups."
+        },
+        {
+          "name": "rb_agent_job",
+          "type": "string",
+          "required": false,
+          "description": "SQL Agent job that backs up this database's log (agent_job mode)."
+        },
+        {
+          "name": "rb_backup_path",
+          "type": "string",
+          "required": false,
+          "description": "Folder or share for native log backups (native mode). Must be inside the customer's retention."
+        },
+        {
+          "name": "rb_shrink",
+          "type": "boolean",
+          "required": false,
+          "default": true,
+          "description": "Shrink the log file after a successful backup."
+        },
+        {
+          "name": "rb_shrink_target_mb",
+          "type": "integer",
+          "required": false,
+          "default": 4096,
+          "description": "Size to shrink the log file to, in MB. Never below the active log."
+        }
+      ],
+      "outcomes": [
+        "none",
+        "escalate",
+        "backup_and_shrink",
+        "backup_only",
+        "shrink_only"
+      ],
+      "rollback": "Nothing to roll back: a log backup and a shrink change no data. If the shrink was too aggressive the log grows again on its own; raise rb_shrink_target_mb for the next run.",
+      "triggers": [
+        "sql-log-used-high"
+      ],
+      "secrets": [
+        "WinRM credential for the customer's SQL servers (OpenBao, per tenant)"
+      ],
+      "notes": "Never run native mode against a database whose log backups belong to Veeam, Commvault or another tool: a stray log backup breaks their restore chain. The gather step reports who took the last log backup.",
+      "playbook": "ansible/runbooks/sql/log-backup-shrink/runbook.yml"
+    },
+    {
+      "id": "vmware/expand-disk",
+      "version": "1.0.0",
+      "title": "Grow a full disk on a VMware virtual machine",
+      "domain": "virtualisation",
+      "summary": "For a guest volume running out of space. Maps the Windows drive or Linux mount to its virtual disk by serial number, checks for snapshots, raw device mappings and datastore headroom, grows the VMDK in vCenter and extends the partition and file system inside the guest. Anything it cannot map or prove safe is escalated.",
+      "executor": "ansible-api",
+      "targets": {
+        "platform": "vcenter",
+        "group": "vmware_guests",
+        "delegate": "localhost"
+      },
+      "risk": "medium",
+      "approval": "required",
+      "max_targets": 1,
+      "params": [
+        {
+          "name": "rb_volume",
+          "type": "string",
+          "required": true,
+          "description": "Windows drive letter (E) or Linux mount point (/var/lib/data) that is full."
+        },
+        {
+          "name": "rb_increase_gb",
+          "type": "integer",
+          "required": true,
+          "description": "How many GB to add to the virtual disk."
+        },
+        {
+          "name": "rb_max_increase_gb",
+          "type": "integer",
+          "required": false,
+          "default": 200,
+          "description": "Largest increase this runbook will make without a change record for a bigger one."
+        },
+        {
+          "name": "rb_datastore_reserve_pct",
+          "type": "integer",
+          "required": false,
+          "default": 15,
+          "description": "Free space the datastore must keep after the grow, as a percentage of its capacity."
+        }
+      ],
+      "outcomes": [
+        "escalate",
+        "expand"
+      ],
+      "rollback": "A grown virtual disk cannot be shrunk. If the increase was wrong, leave the space unallocated in the guest and reclaim it later by migrating the volume; record that on the case.",
+      "triggers": [
+        "disk-free-low"
+      ],
+      "secrets": [
+        "vCenter service account limited to the customer's VM folder, with \"change disk size\" (OpenBao, per tenant)",
+        "WinRM or SSH credential for the guest (OpenBao, per tenant)"
+      ],
+      "notes": "Mapping needs disk.EnableUUID=TRUE on the VM so the guest sees each VMDK's serial; the onboarding check reports VMs without it. A snapshot left behind by a backup job is the most common reason this escalates.",
+      "playbook": "ansible/runbooks/vmware/expand-disk/runbook.yml"
+    },
+    {
+      "id": "windows/restart-spooler",
+      "version": "1.0.0",
+      "title": "Restart a stuck Windows print spooler",
+      "domain": "server",
+      "summary": "Checks the print spooler and its queues on a Windows server. Restarts the spooler when it has stopped or jobs are stuck, and removes only the stuck jobs' spool files. Leaves deliberately disabled spoolers and domain controllers alone, and escalates a spooler that keeps crashing (usually a bad driver).",
+      "executor": "ansible-winrm",
+      "targets": {
+        "platform": "windows",
+        "group": "print_servers"
+      },
+      "risk": "low",
+      "approval": "not_required",
+      "max_targets": 5,
+      "params": [
+        {
+          "name": "rb_stuck_minutes",
+          "type": "integer",
+          "required": false,
+          "default": 15,
+          "description": "A job counts as stuck when it is in error or has not moved for this many minutes."
+        },
+        {
+          "name": "rb_clear_stuck",
+          "type": "boolean",
+          "required": false,
+          "default": true,
+          "description": "Remove the spool files of stuck jobs while the spooler is stopped."
+        },
+        {
+          "name": "rb_max_crashes",
+          "type": "integer",
+          "required": false,
+          "default": 3,
+          "description": "Spooler crashes in the last hour above which we escalate instead of restarting."
+        }
+      ],
+      "outcomes": [
+        "none",
+        "escalate",
+        "start",
+        "restart",
+        "restart_and_clear"
+      ],
+      "rollback": "Removed jobs cannot be restored; users resend them. The restart itself needs no rollback.",
+      "triggers": [
+        "print-spooler-stopped",
+        "print-queue-stuck"
+      ],
+      "secrets": [
+        "WinRM credential for the customer's servers (OpenBao, per tenant)"
+      ],
+      "playbook": "ansible/runbooks/windows/restart-spooler/runbook.yml"
+    }
+  ],
+  "alerts": [
+    {
+      "id": "ad-account-locked-out",
+      "title": "Account locked out (for repeated lockouts and VIP users)",
+      "severity": "P4",
+      "stream_type": "logs",
+      "stream": "default",
+      "query": "SELECT tenant_id, target_user_name, caller_computer_name, COUNT(*) AS lockouts FROM \"default\" WHERE event_id = 4740 GROUP BY tenant_id, target_user_name, caller_computer_name HAVING COUNT(*) >= 3",
+      "period": "60m",
+      "frequency": "10m",
+      "runbook": "identity/unlock-account",
+      "runbook_params": {
+        "rb_username": "target_user_name"
+      }
+    },
+    {
+      "id": "disk-free-low",
+      "title": "Server volume almost full",
+      "severity": "P3",
+      "stream_type": "metrics",
+      "stream": "system_filesystem_utilization",
+      "query": "SELECT tenant_id, host_name, mountpoint, MAX(value) AS used FROM \"system_filesystem_utilization\" WHERE type NOT IN ('tmpfs', 'squashfs', 'overlay') GROUP BY tenant_id, host_name, mountpoint HAVING MAX(value) > 0.92",
+      "period": "15m",
+      "frequency": "5m",
+      "runbook": "vmware/expand-disk",
+      "runbook_params": {
+        "rb_targets": "host_name",
+        "rb_volume": "mountpoint"
+      }
+    },
+    {
+      "id": "print-spooler-stopped",
+      "title": "Print spooler stopped or crashed",
+      "severity": "P3",
+      "stream_type": "logs",
+      "stream": "default",
+      "query": "SELECT tenant_id, host_name, COUNT(*) AS events FROM \"default\" WHERE event_id IN (7031, 7034) AND body LIKE '%Print Spooler%' GROUP BY tenant_id, host_name",
+      "period": "15m",
+      "frequency": "5m",
+      "runbook": "windows/restart-spooler",
+      "runbook_params": {
+        "rb_targets": "host_name"
+      }
+    },
+    {
+      "id": "sql-log-used-high",
+      "title": "SQL Server transaction log almost full",
+      "severity": "P2",
+      "stream_type": "metrics",
+      "stream": "sqlserver_transaction_log_usage",
+      "query": "SELECT tenant_id, host_name, sqlserver_database_name, MAX(value) AS used_pct FROM \"sqlserver_transaction_log_usage\" GROUP BY tenant_id, host_name, sqlserver_database_name HAVING MAX(value) > 90",
+      "period": "10m",
+      "frequency": "5m",
+      "runbook": "sql/log-backup-shrink",
+      "runbook_params": {
+        "rb_targets": "host_name",
+        "rb_database": "sqlserver_database_name"
+      }
+    }
+  ],
+  "_note": "Test fixture: snapshot of ops-foundation build/catalog.json plus its alert specs. Refresh with dev/refresh_catalog.py."
+}

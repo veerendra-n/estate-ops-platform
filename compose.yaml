@@ -1,0 +1,54 @@
+# Local stack: Postgres, the API with the console, the worker, and fakes for Semaphore and OpenObserve.
+# Copy .env.example to .env first. For a lab with real Semaphore and OpenObserve, see docs/running.md.
+x-platform: &platform
+  build: .
+  image: estate-ops-platform:dev
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql://estate:${POSTGRES_PASSWORD:?set it in .env}@postgres:5432/estate_ops
+    SEMAPHORE_URL: ${SEMAPHORE_URL:-http://fakes:8090/semaphore}
+    OPENOBSERVE_URL: ${OPENOBSERVE_URL:-http://fakes:8090/openobserve}
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: estate
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it in .env}
+      POSTGRES_DB: estate_ops
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U estate -d estate_ops"]
+      interval: 2s
+      retries: 30
+
+  migrate:
+    <<: *platform
+    entrypoint: ["sh", "-c", "python -m estate_ops migrate && python -m estate_ops seed"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *platform
+    command: ["api", "--port", "8080"]
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  worker:
+    <<: *platform
+    command: ["worker"]
+
+  fakes:
+    image: estate-ops-platform:dev
+    build: .
+    entrypoint: ["uvicorn", "dev.fakes:app", "--host", "0.0.0.0", "--port", "8090"]
+    ports:
+      - "127.0.0.1:8090:8090"
+
+volumes:
+  pgdata:

@@ -1,0 +1,26 @@
+# Customers the platform serves. tenant_id must match ops-foundation's customers/<tenant_id>/ folder,
+# the NetBox tenant, the OpenObserve organisation and the Semaphore project.
+# No secrets here: each *_env names an environment variable (from OpenBao in production, .env locally).
+tenants:
+  - id: lab
+    name: Lab (fictitious customer for tests and demos)
+    intake_token_env: LAB_INTAKE_TOKEN       # OpenObserve sends this as a Bearer token on the alert webhook
+    openobserve_org: lab
+    semaphore_project_id: 1
+    diagnosis: llm                             # llm | deterministic (no model call; runbook match only)
+    ai_budget_usd_month: 40                    # soft alert at 80%; above it only P1/P2 cases use the model
+    # Autonomy dial per runbook. recommend = show only; approve_to_run = an engineer approves;
+    # run_and_notify = runs after a clean dry run, then tells the team. High-risk runbooks are capped
+    # at recommend whatever this says.
+    autonomy:
+      default: approve_to_run
+  - id: contoso
+    name: Contoso Retail (fictitious)
+    intake_token_env: CONTOSO_INTAKE_TOKEN
+    openobserve_org: contoso
+    semaphore_project_id: 2
+    diagnosis: deterministic
+    ai_budget_usd_month: 40
+    autonomy:
+      default: approve_to_run
+      windows/restart-spooler: run_and_notify
