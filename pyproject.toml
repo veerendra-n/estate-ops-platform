@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "estate-ops-platform"
 version = "0.1.0"
-description = "Agents that diagnose and fix customer estates through ops-foundation runbooks"
+description = "An agentic operations platform: agents that investigate and fix customer estates with tested skills, under policy"
 requires-python = ">=3.12"
 dependencies = [
   "anthropic>=1.15,<2",
@@ -43,9 +43,8 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S"]
 # S101 asserts in tests; S104 the API binds 0.0.0.0 inside its container;
-# S608 telemetry.py builds SQL only from identifiers it has validated.
-ignore = ["S101", "S104", "S608"]
+ignore = ["S101", "S104", "S608"]  # S608: SQL is built from fixed fragments only
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S105", "S106"]
-"dev/*" = ["S311", "E501"]
+"tests/*" = ["S105", "S106", "S107"]
+"src/estate_sim/*" = ["S311"]

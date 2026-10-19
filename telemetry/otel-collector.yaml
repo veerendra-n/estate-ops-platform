@@ -1,0 +1,48 @@
+# The OpenTelemetry Collector as it runs on each customer's edge node: it scrapes and receives telemetry on
+# site, stamps every series and log line with the customer's tenant_id, and ships them to VictoriaMetrics and
+# VictoriaLogs. Here one collector serves the simulated estates, which already label tenant_id themselves.
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: estate-sim
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["sim:8095"]
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 200
+
+exporters:
+  prometheusremotewrite:
+    endpoint: http://victoriametrics:8428/api/v1/write
+    add_metric_suffixes: false
+    resource_to_telemetry_conversion:
+      enabled: false
+  otlphttp/logs:
+    logs_endpoint: http://victorialogs:9428/insert/opentelemetry/v1/logs
+    headers:
+      # Fields that identify a log stream; tenant_id first so every query can be scoped to one customer.
+      VL-Stream-Fields: tenant_id,host
+
+service:
+  telemetry:
+    logs:
+      level: warn
+  pipelines:
+    metrics:
+      receivers: [prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [prometheusremotewrite]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/logs]

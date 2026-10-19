@@ -15,28 +15,40 @@ import yaml
 AUTONOMY_MODES = ("recommend", "approve_to_run", "run_and_notify")
 
 
+# Default service levels (minutes) when a customer's contract doesn't set its own.
+DEFAULT_SLA = {
+    "P1": {"respond": 15, "resolve": 240},
+    "P2": {"respond": 30, "resolve": 480},
+    "P3": {"respond": 240, "resolve": 2880},
+    "P4": {"respond": 480, "resolve": 7200},
+}
+
+
 @dataclass(frozen=True)
 class Tenant:
     id: str
     name: str
     intake_token_env: str
-    openobserve_org: str
-    semaphore_project_id: int
+    industry: str = ""
     diagnosis: str = "llm"
     ai_budget_usd_month: float = 40.0
     autonomy: dict[str, str] = field(default_factory=lambda: {"default": "approve_to_run"})
-    # Integrations, each optional. halopsa: {client_id, site_id?, team?}; teams_webhook_env names the
-    # variable holding the channel's Workflows webhook URL; netbox_tenant defaults to the tenant id;
-    # semaphore: {inventory_id, repository_id, environment_id} for provisioning task templates.
-    halopsa: dict[str, Any] | None = None
+    # contract: {sla: {P1: {respond, resolve}, ...}, change_freeze: [{from, to, reason}], maintenance: "Sun 01:00-05:00"}
+    contract: dict[str, Any] = field(default_factory=dict)
+    # connectors: {vcenter|veeam|microsoft|fleet|edge: {url, ..., *_env}}; see connectors/__init__.py.
+    connectors: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Teams channel for notices and approval links (a Workflows webhook URL in this variable).
     teams_webhook_env: str | None = None
-    netbox_tenant: str | None = None
-    semaphore: dict[str, int] | None = None
+    # Declared facts: business services, owners and criticality (config/estate/<tenant>.yml).
+    declared_file: str | None = None
 
-    def autonomy_for(self, runbook_id: str) -> str:
-        mode = self.autonomy.get(runbook_id, self.autonomy.get("default", "approve_to_run"))
+    def sla(self, priority: str) -> dict[str, int]:
+        return (self.contract.get("sla") or {}).get(priority) or DEFAULT_SLA.get(priority, DEFAULT_SLA["P3"])
+
+    def autonomy_for(self, skill_id: str) -> str:
+        mode = self.autonomy.get(skill_id, self.autonomy.get("default", "approve_to_run"))
         if mode not in AUTONOMY_MODES:
-            raise ValueError(f"{self.id}: unknown autonomy mode {mode!r} for {runbook_id}")
+            raise ValueError(f"{self.id}: unknown autonomy mode {mode!r} for {skill_id}")
         return mode
 
     def intake_token(self) -> str | None:
@@ -88,5 +100,5 @@ class Tenants:
                 conn.execute(
                     "INSERT INTO tenants (id, name, config) VALUES (%s, %s, %s) "
                     "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, config = EXCLUDED.config",
-                    (t.id, t.name, json.dumps({"autonomy": t.autonomy, "diagnosis": t.diagnosis})),
+                    (t.id, t.name, json.dumps({"autonomy": t.autonomy, "diagnosis": t.diagnosis, "industry": t.industry})),
                 )

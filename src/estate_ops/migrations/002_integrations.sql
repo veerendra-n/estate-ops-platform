@@ -1,4 +1,4 @@
--- Links from a case to its records in other systems (the HaloPSA ticket, the Teams message), so each
+-- Links from a case to its records in other systems (a Teams message, a vendor case), so each
 -- integration stays idempotent when NATS redelivers an event.
 CREATE TABLE external_refs (
     tenant_id   text NOT NULL REFERENCES tenants(id),

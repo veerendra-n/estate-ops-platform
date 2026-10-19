@@ -1,6 +1,6 @@
 """Append-only, hash-chained action ledger. Each tenant has its own chain.
 
-Every agent finding, proposal, approval and runbook result is an entry, so the case conversation and the
+Every agent finding, proposal, approval and skill run is an entry, so the case conversation and the
 audit trail are the same record. The database refuses updates and deletes; verify() detects tampering
 done around it (for example by a superuser) by recomputing the chain.
 """

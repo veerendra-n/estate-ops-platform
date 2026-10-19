@@ -1,4 +1,4 @@
-"""Integrations that react to case events: HaloPSA tickets and Microsoft Teams cards.
+"""Integrations that react to case events, such as Microsoft Teams cards.
 
 Each one is a durable consumer of the NATS events stream (one ledger entry per message), so it gets every
 event in order, keeps up after an outage, and never slows a case down. Delivery is at least once:
@@ -70,12 +70,25 @@ async def run(platform, bus: Bus, integration: Integration, stop: asyncio.Event)
             continue
         entry = json.loads(msg.data)
         try:
-            await asyncio.to_thread(_handle, platform, integration, entry)
+            outcome = await asyncio.to_thread(_handle, platform, integration, entry)
         except Exception as exc:
             failures += 1
             delay = min(300, 2 ** min(failures, 8))
             log.warning("%s: entry %s failed (%s); retrying in %ss", integration.name, entry.get("id"), exc, delay)
+            await asyncio.to_thread(_status, platform, integration, entry, False, f"{type(exc).__name__}: {exc}")
             await msg.nak(delay=delay)
             continue
         failures = 0
+        if outcome == "delivered":
+            await asyncio.to_thread(_status, platform, integration, entry, True, None)
         await msg.ack()
+
+
+def _status(platform, integration: Integration, entry: dict[str, Any], ok: bool, error: str | None) -> None:
+    from ..sources import record
+
+    try:
+        detail = {"delivered_total": 1, "last_entry": entry.get("id")} if ok else {"last_failed_entry": entry.get("id")}
+        record(platform, entry["tenant_id"], integration.name, "events", ok, detail, error)
+    except Exception:  # status is for people to read; never let it block delivery
+        log.exception("recording %s status failed", integration.name)

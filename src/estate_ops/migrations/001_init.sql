@@ -1,5 +1,5 @@
--- First schema: tenants, signals, cases, proposals, the action ledger and AI usage. The estate graph is in
--- Neo4j and the case workflow in Temporal.
+-- First schema: tenants, cases (the system of record), signals, proposals, the action ledger and AI usage.
+-- The estate graph is in Neo4j and the case workflow in Temporal.
 -- Every tenant-owned table carries tenant_id and is protected by row-level security keyed on the
 -- session setting app.tenants (a comma-separated list the API or worker sets per transaction).
 -- The application connects as estate_app, which owns nothing and so cannot bypass the policies.
@@ -17,25 +17,37 @@ CREATE TABLE tenants (
 
 CREATE SEQUENCE case_ref_seq;
 
+-- One work object for incidents, requests, problems and changes; the type decides policy and evidence.
+-- SLA clocks come from the customer's contract at the case's priority (severity) when it opens.
 CREATE TABLE cases (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id    text NOT NULL REFERENCES tenants(id),
-    ref          text NOT NULL,
-    title        text NOT NULL,
-    severity     text NOT NULL,
-    status       text NOT NULL CHECK (status IN
-                   ('open', 'diagnosing', 'awaiting_approval', 'running', 'resolved', 'escalated')),
-    fingerprint  text NOT NULL,
-    target       text,
-    summary      text,
-    opened_at    timestamptz NOT NULL DEFAULT now(),
-    updated_at   timestamptz NOT NULL DEFAULT now(),
-    resolved_at  timestamptz,
+    id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id        text NOT NULL REFERENCES tenants(id),
+    ref              text NOT NULL,
+    type             text NOT NULL DEFAULT 'incident' CHECK (type IN ('incident', 'request', 'problem', 'change')),
+    title            text NOT NULL,
+    severity         text NOT NULL CHECK (severity IN ('P1', 'P2', 'P3', 'P4')),
+    status           text NOT NULL CHECK (status IN
+                       ('open', 'diagnosing', 'awaiting_approval', 'running', 'resolved', 'escalated', 'merged')),
+    source           text NOT NULL DEFAULT 'alert',
+    fingerprint      text NOT NULL,
+    target           text,
+    -- Estate graph asset ids of everything the case's alerts point at; triage folds related alerts in by these.
+    assets           text[] NOT NULL DEFAULT '{}',
+    service          text,
+    requester        text,
+    parent_id        uuid REFERENCES cases(id),
+    summary          text,
+    opened_at        timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now(),
+    responded_at     timestamptz,
+    resolved_at      timestamptz,
+    respond_due      timestamptz,
+    resolve_due      timestamptz,
     UNIQUE (tenant_id, ref)
 );
--- At most one open case per fingerprint: repeat alerts fold into it.
-CREATE UNIQUE INDEX cases_one_open_per_fingerprint ON cases (tenant_id, fingerprint)
-    WHERE status NOT IN ('resolved', 'escalated');
+CREATE INDEX cases_tenant_updated ON cases (tenant_id, updated_at DESC);
+-- fingerprint is that of the alert that opened the case; repeats of any alert fold in by the signals table.
+CREATE INDEX cases_tenant_open ON cases (tenant_id, updated_at DESC) WHERE status NOT IN ('resolved', 'escalated', 'merged');
 
 CREATE TABLE signals (
     id           bigserial PRIMARY KEY,
@@ -47,24 +59,28 @@ CREATE TABLE signals (
     alert_id     text NOT NULL,
     fingerprint  text NOT NULL,
     target       text,
+    asset_id     text,
     labels       jsonb NOT NULL DEFAULT '{}'::jsonb,
     received_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX signals_case ON signals (case_id);
+CREATE INDEX signals_fingerprint ON signals (tenant_id, fingerprint, id DESC);
 -- A redelivered intake message folds into nothing: each (intake, row) is stored once.
 CREATE UNIQUE INDEX signals_once ON signals (tenant_id, intake_id, row_no);
 
+-- A skill an agent proposes for a case, with the policy decision that set how far it may go.
 CREATE TABLE proposals (
     id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id         text NOT NULL REFERENCES tenants(id),
     case_id           uuid NOT NULL REFERENCES cases(id),
-    runbook_id        text NOT NULL,
-    runbook_version   text NOT NULL,
-    catalog_commit    text,
+    skill_id          text NOT NULL,
+    skill_version     text NOT NULL,
+    library_version   text,
     targets           text NOT NULL,
     params            jsonb NOT NULL,
     risk              text NOT NULL,
     mode              text NOT NULL CHECK (mode IN ('recommend', 'approve_to_run', 'run_and_notify')),
+    policy            jsonb NOT NULL DEFAULT '{}'::jsonb,
     status            text NOT NULL CHECK (status IN
                         ('proposed', 'dry_running', 'awaiting_approval', 'approved', 'rejected',
                          'running', 'done', 'failed')),
@@ -76,6 +92,7 @@ CREATE TABLE proposals (
     created_at        timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX proposals_case ON proposals (case_id);
+CREATE INDEX proposals_tenant_skill ON proposals (tenant_id, skill_id, created_at);
 
 -- Append-only, hash-chained per tenant. The case conversation in the console is read from here.
 CREATE TABLE ledger (

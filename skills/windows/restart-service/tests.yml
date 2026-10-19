@@ -1,0 +1,13 @@
+defaults:
+  service: Spooler
+  verify_seconds: 30
+cases:
+  - name: a stopped service is restarted
+    facts: {host: FAB-APP003, service: Spooler, state: stopped}
+    expect: restart_service
+  - name: a running service is left alone
+    facts: {host: FAB-APP003, service: Spooler, state: running}
+    expect: none
+  - name: a missing service goes to an engineer
+    facts: {host: FAB-APP003, service: Foo, state: not installed}
+    expect: escalate

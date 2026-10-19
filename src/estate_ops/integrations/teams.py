@@ -2,7 +2,7 @@
 
 Cards go to a channel through a Teams Workflows webhook (the replacement for Office 365 connectors), one
 URL per customer channel, named by `teams_webhook_env` in tenants.yml. A webhook card can open links but
-cannot carry buttons that call back, so "Approve" opens the case in the console, where the engineer is
+cannot carry buttons that call back, so "Approve" opens the case in the cockpit, where the engineer is
 signed in. Approving inside Teams needs a bot registration; that is a later step.
 """
 
@@ -24,9 +24,8 @@ def card_for(entry: dict[str, Any], case: dict[str, Any], tenant: Tenant, link: 
         headline, text, button = "Approval needed", f"Dry run found: {b.get('reason') or b.get('action')}", "Review and approve"
     elif kind == "escalated":
         headline, text, button = "Needs an engineer", b.get("reason") or "", "Open the case"
-    elif kind == "run_result" and not b.get("dry_run") and b.get("outcome") in ("fixed", "no_action"):
-        reason = ((b.get("evidence") or {}).get("decision") or {}).get("reason", "")
-        headline, text, button = "Fixed by runbook", reason, "See what was done"
+    elif kind == "resolved":
+        headline, text, button = "Resolved", b.get("reason") or "", "See what was done"
     else:
         return None
     card = {

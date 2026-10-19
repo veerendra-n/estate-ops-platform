@@ -1,31 +1,70 @@
-# Customers the platform serves. tenant_id must match ops-foundation's customers/<tenant_id>/ folder,
-# the NetBox tenant, the OpenObserve organisation and the Semaphore project.
-# No secrets here: each *_env names an environment variable (from OpenBao in production, .env locally).
+# Customers the platform serves. No secrets here: every *_env names an environment variable that holds the
+# secret (a vault in production, .env in a Codespace or on a laptop).
+#
+# The two customers below are fictitious and point at the estate simulator (src/estate_sim), which answers
+# with vCenter, Veeam, Microsoft Graph, Fleet and edge-node APIs. A real customer points the same connectors
+# at its own systems: url to their vCenter, Veeam and edge node, entra_tenant_id and client_id of the app
+# registration it granted, and the variables holding the credentials.
 tenants:
-  - id: lab
-    name: Lab (fictitious customer for tests and demos)
-    intake_token_env: LAB_INTAKE_TOKEN       # OpenObserve sends this as a Bearer token on the alert webhook
-    openobserve_org: lab
-    semaphore_project_id: 1
-    diagnosis: llm                             # llm | deterministic (no model call; runbook match only)
-    ai_budget_usd_month: 40                    # soft alert at 80%; above it only P1/P2 cases use the model
-    # Autonomy dial per runbook. recommend = show only; approve_to_run = an engineer approves;
-    # run_and_notify = runs after a clean dry run, then tells the team. High-risk runbooks are capped
-    # at recommend whatever this says.
+  - id: contoso
+    name: Contoso Retail
+    industry: Retail, 3000 staff, 180 stores
+    intake_token_env: CONTOSO_INTAKE_TOKEN   # bearer token for alerts posted to /api/v1/intake/<source>/contoso
+    diagnosis: llm                             # llm | deterministic (graph walk only, no model calls)
+    ai_budget_usd_month: 40                    # above it only P1 and P2 cases use the model
+    # Autonomy per skill, as far as the customer allows it. Policy (policy/autonomy.rego) can only lower it:
+    # high risk, approval-required skills, change freezes, recent failures and critical blast radius cap it.
     autonomy:
       default: approve_to_run
-    # Optional integrations. Values are ids in those systems, never secrets.
-    halopsa: { client_id: 12, site_id: 34 }  # HaloPSA client and site this customer's tickets go to
-    teams_webhook_env: LAB_TEAMS_WEBHOOK      # Workflows webhook URL of the customer's Teams channel
-    netbox_tenant: lab                        # NetBox tenant slug (defaults to the tenant id)
-    semaphore: { inventory_id: 1, repository_id: 1, environment_id: 1 }  # for `provision semaphore`
-  - id: contoso
-    name: Contoso Retail (fictitious)
-    intake_token_env: CONTOSO_INTAKE_TOKEN
-    openobserve_org: contoso
-    semaphore_project_id: 2
-    diagnosis: deterministic
+      windows/restart-service: run_and_notify
+      windows/cleanup-disk: run_and_notify
+    contract:
+      sla:                                      # minutes; P3 and P4 use the platform defaults
+        P1: { respond: 15, resolve: 240 }
+        P2: { respond: 30, resolve: 480 }
+      maintenance: "Sun 01:00-05:00"
+      change_freeze:
+        - { from: "2026-11-27T00:00:00Z", to: "2026-12-01T00:00:00Z", reason: Black Friday weekend }
+    declared_file: contoso.yml                  # config/estate/contoso.yml: business services and owners
+    connectors:
+      vcenter: { url: "http://sim:8095/contoso/vcenter", username_env: CONTOSO_VCENTER_USER, password_env: CONTOSO_VCENTER_PASSWORD }
+      veeam: { url: "http://sim:8095/contoso/veeam", username_env: CONTOSO_VEEAM_USER, password_env: CONTOSO_VEEAM_PASSWORD }
+      microsoft:
+        entra_tenant_id: 9f4c2a1e-1111-4c3b-9d1a-c0a5e0000001
+        client_id: 6a1d1d3e-0000-4000-8000-00000000c701
+        client_secret_env: CONTOSO_GRAPH_SECRET
+        graph_url: "http://sim:8095/contoso/graph"
+        login_url: "http://sim:8095/contoso/login"
+      fleet: { url: "http://sim:8095/contoso/fleet", token_env: CONTOSO_FLEET_TOKEN }
+      edge: { url: "http://sim:8095/contoso/edge", token_env: CONTOSO_EDGE_TOKEN }
+    teams_webhook_env: CONTOSO_TEAMS_WEBHOOK    # optional: a Teams Workflows webhook URL for the customer's channel
+
+  - id: fabrikam
+    name: Fabrikam Health
+    industry: Healthcare, 2800 staff, 3 hospitals
+    intake_token_env: FABRIKAM_INTAKE_TOKEN
+    diagnosis: llm
     ai_budget_usd_month: 40
     autonomy:
       default: approve_to_run
-      windows/restart-spooler: run_and_notify
+      backup/free-space-and-rerun: run_and_notify
+      windows/restart-service: run_and_notify
+      windows/cleanup-disk: run_and_notify
+    contract:
+      sla:
+        P1: { respond: 10, resolve: 180 }
+        P2: { respond: 20, resolve: 360 }
+      maintenance: "Sat 22:00-Sun 02:00"
+    declared_file: fabrikam.yml
+    connectors:
+      vcenter: { url: "http://sim:8095/fabrikam/vcenter", username_env: FABRIKAM_VCENTER_USER, password_env: FABRIKAM_VCENTER_PASSWORD }
+      veeam: { url: "http://sim:8095/fabrikam/veeam", username_env: FABRIKAM_VEEAM_USER, password_env: FABRIKAM_VEEAM_PASSWORD }
+      microsoft:
+        entra_tenant_id: 1b7d3e5f-2222-4a6b-8c9d-f0a5e0000002
+        client_id: 6a1d1d3e-0000-4000-8000-00000000fa02
+        client_secret_env: FABRIKAM_GRAPH_SECRET
+        graph_url: "http://sim:8095/fabrikam/graph"
+        login_url: "http://sim:8095/fabrikam/login"
+      fleet: { url: "http://sim:8095/fabrikam/fleet", token_env: FABRIKAM_FLEET_TOKEN }
+      edge: { url: "http://sim:8095/fabrikam/edge", token_env: FABRIKAM_EDGE_TOKEN }
+    teams_webhook_env: FABRIKAM_TEAMS_WEBHOOK

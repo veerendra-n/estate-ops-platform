@@ -30,14 +30,16 @@ jobs:
       TEST_NEO4J_PASSWORD: ci-only-password
       TEST_NATS_URL: nats://localhost:4222
       TEST_TEMPORAL_ADDRESS: localhost:7233
+      TEST_OPA_URL: http://localhost:8181
     steps:
       - uses: actions/checkout@v4
-      # Service containers can't take a command, so NATS (JetStream on) and the Temporal dev server run here.
+      # Service containers can't take a command or a checked-out volume, so these run here.
       - run: docker run -d --name nats -p 4222:4222 nats:2.11-alpine -js
       - run: docker run -d --name temporal -p 7233:7233 temporalio/temporal:1.9.1 server start-dev --ip 0.0.0.0
-      - name: Wait for Neo4j, NATS and Temporal
+      - run: docker run -d --name opa -p 8181:8181 -v "$PWD/policy:/policy:ro" openpolicyagent/opa:1.10.1 run --server --addr 0.0.0.0:8181 /policy/autonomy.rego
+      - name: Wait for Neo4j, NATS, Temporal and OPA
         run: |
-          for port in 7687 4222 7233; do
+          for port in 7687 4222 7233 8181; do
             timeout 120 bash -c "until (echo > /dev/tcp/localhost/$port) 2>/dev/null; do sleep 1; done"
           done
           timeout 120 bash -c 'until docker exec temporal temporal operator cluster health 2>/dev/null | grep -q SERVING; do sleep 1; done'
@@ -49,17 +51,44 @@ jobs:
       - run: ruff format --check .
       - run: python -m pytest -q
 
-  image:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Policy tests, strict check and formatting
+        run: |
+          docker run --rm -v "$PWD/policy:/policy:ro" openpolicyagent/opa:1.10.1 test -v /policy
+          docker run --rm -v "$PWD/policy:/policy:ro" openpolicyagent/opa:1.10.1 check --strict /policy
+          test -z "$(docker run --rm -v "$PWD/policy:/policy:ro" openpolicyagent/opa:1.10.1 fmt -l /policy)"
+
+  cockpit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cockpit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: cockpit/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build
+
+  stack:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t estate-ops-platform:ci .
-      - name: Check the production stack and scripts
+      - name: Check the compose stack, alert rules and scripts
         run: |
-          bash -n deploy/install.sh deploy/backup.sh deploy/restore.sh
-          shellcheck deploy/*.sh
-          touch deploy/.env
-          DOMAIN=ci.example.net POSTGRES_PASSWORD=x NEO4J_PASSWORD=x docker compose -f deploy/compose.yaml config -q
+          scripts/dev-env.sh
+          docker compose config -q
+          docker run --rm -v "$PWD/alerts:/rules:ro" victoriametrics/vmalert:v1.115.0 -rule=/rules/*.yml -dryRun
+          bash -n scripts/*.sh
+          shellcheck scripts/*.sh
 
   secrets:
     runs-on: ubuntu-latest

@@ -1,4 +1,4 @@
-"""Command line: python -m estate_ops {migrate|seed|discover|provision|api|worker}."""
+"""Command line: python -m estate_ops {migrate|discover|api|worker}."""
 
 from __future__ import annotations
 
@@ -26,42 +26,13 @@ def cmd_migrate(settings: Settings) -> None:
     print(f"migrations applied: {applied or 'none'}; tenants synced; graph schema ensured")
 
 
-def cmd_seed(settings: Settings) -> None:
-    if not settings.seed_file:
-        print("no SEED_FILE set")
-        return
-    graph = EstateGraph(settings.neo4j_url, settings.neo4j_user, settings.neo4j_password)
-    graph.ensure_schema()
-    n = graph.load_seed(settings.seed_file)
-    graph.close()
-    print(f"seeded {n} assets from {settings.seed_file}")
-
-
-def cmd_discover(settings: Settings) -> None:
+def cmd_discover(settings: Settings, tenant_ids: list[str]) -> None:
+    from . import sources
     from .app import build
-    from .worker import discover_all
-
-    if not (settings.netbox_url and settings.netbox_token):
-        print("set NETBOX_URL and NETBOX_TOKEN")
-        return
-    platform = build(settings)
-    print(json.dumps(discover_all(platform), indent=2))
-
-
-def cmd_provision(settings: Settings, what: str, tenant_ids: list[str]) -> None:
-    from .app import build
-    from .integrations import provision
 
     platform = build(settings)
-    tenants = [platform.tenants.get(t) for t in tenant_ids] if tenant_ids else list(platform.tenants)
-    report: dict[str, dict] = {}
-    for t in tenants:
-        if what in ("semaphore", "all"):
-            report.setdefault(t.id, {})["semaphore"] = provision.semaphore_templates(platform.semaphore, platform.catalog, t)
-        if what in ("openobserve", "all"):
-            admin = provision.OpenObserveAdmin(settings.openobserve_url, settings.openobserve_user, settings.openobserve_password)
-            report.setdefault(t.id, {})["openobserve"] = admin.provision(platform.catalog, t, settings.public_url)
-    print(json.dumps(report, indent=2))
+    tenants = [platform.tenants.get(t) for t in tenant_ids] if tenant_ids else None
+    print(json.dumps(sources.discover_all(platform, tenants), indent=2))
 
 
 def cmd_api(settings: Settings, host: str, port: int) -> None:
@@ -91,14 +62,12 @@ def cmd_worker(settings: Settings) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # one line per connector call drowns the useful logs
     parser = argparse.ArgumentParser(prog="estate_ops")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("migrate")
-    sub.add_parser("seed")
-    sub.add_parser("discover", help="read NetBox into the estate graph once")
-    prov = sub.add_parser("provision", help="create Semaphore templates and OpenObserve alerts from the catalog")
-    prov.add_argument("what", choices=["semaphore", "openobserve", "all"])
-    prov.add_argument("--tenant", action="append", default=[])
+    disc = sub.add_parser("discover", help="read every customer's systems into the estate graph once")
+    disc.add_argument("--tenant", action="append", default=[])
     api = sub.add_parser("api")
     api.add_argument("--host", default="0.0.0.0")
     api.add_argument("--port", type=int, default=8080)
@@ -107,12 +76,8 @@ def main(argv: list[str] | None = None) -> int:
     settings = Settings.from_env()
     if args.cmd == "migrate":
         cmd_migrate(settings)
-    elif args.cmd == "seed":
-        cmd_seed(settings)
     elif args.cmd == "discover":
-        cmd_discover(settings)
-    elif args.cmd == "provision":
-        cmd_provision(settings, args.what, args.tenant)
+        cmd_discover(settings, args.tenant)
     elif args.cmd == "api":
         cmd_api(settings, args.host, args.port)
     elif args.cmd == "worker":

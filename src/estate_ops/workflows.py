@@ -1,12 +1,14 @@
-"""The case workflow on Temporal: diagnose, dry run, wait for an engineer, run, verify.
+"""The case workflow on Temporal: settle, investigate, dry run, wait for an engineer, run and verify.
 
-    alert -> case (triage) -> diagnose -> proposal -> dry run -> approval -> live run -> resolved
-                                       `-> escalated (no runbook, invalid proposal, runbook escalates,
-                                                       rejection, no decision in time, a step that keeps failing)
+    alerts -> case (triage) -> settle -> investigate -> proposal -> dry run -> approval -> live run + verify -> resolved
+                                                    `-> escalated (no skill, invalid proposal, the skill escalates,
+                                                        recommend-only policy, rejection, no decision in time,
+                                                        a failed check, a step that keeps failing)
 
-Temporal holds the waiting (Semaphore polls, an approval that takes a day) and retries a step that fails,
-so a worker restart never loses a case. The steps themselves are activities in activities.py and write
-the case, the proposal and the ledger in Postgres; this module only decides what runs next. It runs in
+Temporal holds the waiting (the settle window, an approval that takes a day, a long backup rerun) and retries
+a step that fails, so a worker restart never loses a case. The steps are Platform methods in service.py run
+as activities; they write the case, the proposal and the ledger in Postgres, and this module only decides
+what runs next. It runs in
 Temporal's workflow sandbox, so it imports nothing but the standard library and temporalio, and calls
 activities by name.
 """
@@ -22,15 +24,15 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError
 
 STEP_RETRY = RetryPolicy(maximum_attempts=5, non_retryable_error_types=["WorkflowError", "LookupError"])
-# Starting a Semaphore task is not idempotent if it fails half way, so retry it fewer times.
-START_RETRY = RetryPolicy(maximum_attempts=3, non_retryable_error_types=["WorkflowError", "LookupError"])
+# A live run re-gathers and re-decides before acting, so a retry is safe, but don't hammer an estate.
+RUN_RETRY = RetryPolicy(maximum_attempts=2, non_retryable_error_types=["WorkflowError", "LookupError"])
 
 
 @dataclass
 class CaseInput:
     tenant_id: str
     case_id: str
-    poll_seconds: float
+    settle_seconds: float
     approval_timeout_seconds: float
 
 
@@ -63,22 +65,20 @@ class CaseWorkflow:
     async def run(self, inp: CaseInput) -> str:
         self.input = inp
         t = inp.tenant_id
-        stage = "diagnose"
+        stage = "investigation"
         try:
-            step = await self._step("diagnose", t, inp.case_id, minutes=5)
+            # Symptoms of one problem arrive over a minute or so; let triage fold them in before investigating.
+            if inp.settle_seconds > 0:
+                await workflow.sleep(timedelta(seconds=inp.settle_seconds))
+            step = await self._step("investigate", t, inp.case_id, minutes=5)
             while step["next"] != "end":
                 pid = step["proposal_id"]
-                if step["next"] in ("dry_run", "live"):
-                    live = step["next"] == "live"
-                    stage = "live run" if live else "dry run"
-                    task_id = await self._step("start_run", t, pid, live, retry=START_RETRY)
-                    started = workflow.now().timestamp()
-                    while True:
-                        polled = await self._step("poll_run", t, pid, task_id, live, started)
-                        if polled is not None:
-                            step = polled
-                            break
-                        await workflow.sleep(timedelta(seconds=inp.poll_seconds))
+                if step["next"] == "dry_run":
+                    stage = "dry run"
+                    step = await self._step("run_skill", t, pid, False, minutes=5)
+                elif step["next"] == "live":
+                    stage = "live run"
+                    step = await self._step("run_skill", t, pid, True, minutes=60, retry=RUN_RETRY)
                 elif step["next"] == "approval":
                     stage = "approval"
                     step = await self._await_decision(pid)

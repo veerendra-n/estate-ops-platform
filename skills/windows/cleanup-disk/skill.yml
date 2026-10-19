@@ -1,0 +1,29 @@
+id: windows/cleanup-disk
+version: "1.0.0"
+title: Clean up a nearly full Windows volume
+summary: >-
+  Remove temp files, old logs and superseded Windows components from a volume above the threshold, through
+  the edge node's fixed cleanup. Escalates when the cleanup can't bring it under the threshold, which means
+  the disk needs to grow.
+risk: low
+approval: not_required
+target:
+  kind: server
+connectors: [edge]
+max_targets: 1
+params:
+  - name: mount
+    type: string
+    default: "C:"
+    description: The volume to clean.
+  - name: threshold
+    type: number
+    default: 0.9
+    min: 0.5
+    max: 0.99
+    description: Clean when more than this share of the volume is in use.
+triggers:
+  - alert: HostDiskFull
+    params:
+      mount: mount
+rollback: Nothing to roll back; only temporary and superseded files are removed.

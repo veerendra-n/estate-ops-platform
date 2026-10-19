@@ -1,0 +1,101 @@
+# Alert rules vmalert evaluates on VictoriaMetrics for every customer. Every series carries tenant_id (the
+# OpenTelemetry Collector stamps it), every rule keeps it, and the platform's intake refuses an alert without
+# it. Labels name the asset (datastore, host, service, repository, device): triage matches them to the estate
+# graph and folds related alerts into one case. severity is the case priority (P1 to P4); annotations.title is
+# the case title. A skill names the alerts that trigger it (skills/*/*/skill.yml, triggers).
+groups:
+  - name: infrastructure
+    interval: 15s
+    rules:
+      - alert: DatastoreLatencyHigh
+        expr: max by (tenant_id, datastore) (datastore_latency_ms) > 20
+        for: 30s
+        labels: { severity: P2 }
+        annotations:
+          title: Datastore {{ $labels.datastore }} latency high
+          value: '{{ printf "%.1f" $value }} ms'
+
+      - alert: ServerDiskLatencyHigh
+        expr: max by (tenant_id, host) (host_disk_latency_ms) > 25
+        for: 30s
+        labels: { severity: P3 }
+        annotations:
+          title: Disk latency high on {{ $labels.host }}
+          value: '{{ printf "%.1f" $value }} ms'
+
+      - alert: HostCPUHigh
+        expr: max by (tenant_id, host) (host_cpu_utilization) > 0.88
+        for: 30s
+        labels: { severity: P4 }
+        annotations:
+          title: CPU high on {{ $labels.host }}
+          value: '{{ $value | humanizePercentage }}'
+
+      - alert: HostDiskFull
+        expr: max by (tenant_id, host, mount) (host_disk_used_ratio) > 0.92
+        for: 1m
+        labels: { severity: P3 }
+        annotations:
+          title: Volume {{ $labels.mount }} nearly full on {{ $labels.host }}
+          value: '{{ $value | humanizePercentage }} used'
+
+      - alert: HostDiskFillingUp
+        expr: predict_linear(host_disk_used_ratio[1h], 7 * 86400) > 1 and host_disk_used_ratio > 0.75
+        for: 10m
+        labels: { severity: P4 }
+        annotations:
+          title: Volume {{ $labels.mount }} on {{ $labels.host }} fills within a week
+          value: '{{ $value | humanizePercentage }} predicted in 7 days'
+
+      - alert: WindowsServiceStopped
+        expr: min by (tenant_id, host, win_service) (windows_service_up) == 0
+        for: 30s
+        labels: { severity: P3 }
+        annotations:
+          title: Service {{ $labels.win_service }} stopped on {{ $labels.host }}
+
+      - alert: CertificateExpiring
+        expr: min by (tenant_id, host, certificate) (certificate_days_left) < 14
+        for: 1m
+        labels: { severity: P3 }
+        annotations:
+          title: Certificate {{ $labels.certificate }} expires in {{ $value }} days
+          value: '{{ $value }} days'
+
+  - name: services
+    interval: 15s
+    rules:
+      - alert: ServiceLatencyHigh
+        expr: max by (tenant_id, service) (service_latency_p95_ms) > 1500
+        for: 30s
+        labels: { severity: P2 }
+        annotations:
+          title: "{{ $labels.service }} is slow"
+          value: '{{ printf "%.0f" $value }} ms p95'
+
+      - alert: ServiceErrorsHigh
+        expr: max by (tenant_id, service) (service_error_ratio) > 0.02
+        for: 30s
+        labels: { severity: P2 }
+        annotations:
+          title: "{{ $labels.service }} is failing requests"
+          value: '{{ $value | humanizePercentage }} errors'
+
+  - name: backup-and-endpoints
+    interval: 30s
+    rules:
+      - alert: BackupRepositoryLow
+        expr: min by (tenant_id, repository) (backup_repository_free_ratio) < 0.05
+        for: 30s
+        labels: { severity: P2 }
+        annotations:
+          title: Backup repository {{ $labels.repository }} nearly full
+          value: '{{ $value | humanizePercentage }} free'
+
+      - alert: VpnTunnelDrops
+        expr: sum by (tenant_id, device) (increase(vpn_tunnel_drops_total[15m])) > 5
+        for: 1m
+        labels: { severity: P3 }
+        annotations:
+          title: VPN keeps dropping on {{ $labels.device }}
+          value: '{{ printf "%.0f" $value }} drops in 15 minutes'

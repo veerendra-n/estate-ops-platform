@@ -1,6 +1,6 @@
-"""HTTP API: alert intake for OpenObserve, case and approval endpoints for the console.
+"""HTTP API: alert intake, and the cockpit's case, approval, estate, skills and lab endpoints.
 
-Intake checks the webhook and queues it on NATS, so it answers fast and keeps working while Postgres or
+Intake checks each alert and queues it on NATS, so it answers fast and keeps working while Postgres or
 the worker is busy. Approvals go to the case's Temporal workflow as a "decide" update, which refuses a
 proposal that is not waiting for a decision; the API never writes a decision itself.
 """
@@ -8,29 +8,61 @@ proposal that is not waiting for a decision; the API never writes a decision its
 from __future__ import annotations
 
 import asyncio
+import hmac
+import os
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from temporalio.client import WorkflowUpdateFailedError
 from temporalio.service import RPCError
 
-from . import auth, budget, ledger, triage
+from . import __version__, auth, budget, ledger, sources, triage, views
 from .bus import Bus
 from .service import Platform
 from .workflows import CaseWorkflow, DecideInput, workflow_id
 
-CONSOLE_DIR = Path(__file__).resolve().parents[2] / "console"
+COCKPIT_DIR = Path(os.environ.get("COCKPIT_DIR") or Path(__file__).resolve().parents[2] / "cockpit" / "dist")
+
+
+class Question(BaseModel):
+    question: str = Field(min_length=3, max_length=1000)
+    who: str = Field(default="", max_length=80)
 
 
 class Decision(BaseModel):
     who: str = Field(default="", max_length=80)  # only used with the shared token; SSO uses the ID token
     note: str = Field(default="", max_length=500)
+
+
+def _uuid(value: str, what: str) -> str:
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        raise HTTPException(404, f"no such {what}") from None
+
+
+class RateLimit:
+    """At most `per_minute` calls per key in any minute, in this process. Enough to stop a stuck browser
+    tab from spending a customer's AI budget."""
+
+    def __init__(self, per_minute: int):
+        self.per_minute, self.calls = per_minute, {}
+
+    def allow(self, key: str) -> bool:
+        now = time.monotonic()
+        recent = [t for t in self.calls.get(key, []) if now - t < 60]
+        if len(recent) >= self.per_minute:
+            self.calls[key] = recent
+            return False
+        self.calls[key] = [*recent, now]
+        return True
 
 
 def _bearer(authorization: str | None) -> str | None:
@@ -51,9 +83,10 @@ def create_app(platform: Platform) -> FastAPI:
         yield
         await app.state.bus.close()
 
-    app = FastAPI(title="Estate Ops Platform", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Estate Ops Platform", version=__version__, lifespan=lifespan)
     app.state.platform = platform
     auth.install(app, platform.settings)
+    limiter = RateLimit(per_minute=12)
 
     @app.get("/auth/me", include_in_schema=False)
     def me(request: Request, authorization: str | None = Header(default=None)) -> dict[str, Any]:
@@ -78,72 +111,127 @@ def create_app(platform: Platform) -> FastAPI:
     def engineer_scope() -> list[str]:
         return platform.tenants.ids()  # later: the tenants this engineer's team serves
 
+    def scoped(tenant: str | None) -> list[str]:
+        """One customer when asked for (and theirs to see), else every customer in scope."""
+        if tenant is None:
+            return engineer_scope()
+        if tenant not in engineer_scope():
+            raise HTTPException(403, "not your customer")
+        return [tenant]
+
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:
         return {
             "ok": True,
-            "catalog_commit": platform.catalog.commit,
-            "runbooks": len(platform.catalog.runbook_ids()),
+            "version": __version__,
+            "skills": len(platform.skills.ids()),
+            "library_version": platform.skills.version,
             "model": platform.settings.diagnosis_model if platform.anthropic else None,
         }
 
-    @app.post("/api/v1/intake/openobserve/{tenant_id}", status_code=202)
-    async def intake(tenant_id: str, request: Request, authorization: str | None = Header(default=None)):
+    @app.post("/api/v1/intake/alertmanager/api/v2/alerts", status_code=200)
+    async def alertmanager(request: Request, authorization: str | None = Header(default=None)):
+        """vmalert's notifier: Alertmanager API v2 alerts for every customer; each alert's tenant_id label says whose."""
+        expected = os.environ.get(platform.settings.alerts_token_env) or ""
+        presented = _bearer(authorization) or ""
+        if not expected or not hmac.compare_digest(expected.encode(), presented.encode()):
+            raise HTTPException(401, "bad alerts token")
+        try:
+            raw = await request.json()
+            if not isinstance(raw, list):
+                raise ValueError("expected a list of alerts")
+            items = sources.alertmanager(raw)
+            for tenant_id, _, payload in items:
+                platform.tenants.get(tenant_id)
+                triage.check(tenant_id, payload)
+        except (triage.IntakeError, KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(422, f"not an Alertmanager alert list: {exc}") from None
+        for tenant_id, intake_id, payload in items:
+            await app.state.bus.publish_intake(tenant_id, intake_id, payload)
+        return {"queued": len(items)}
+
+    @app.post("/api/v1/intake/{source}/{tenant_id}", status_code=202)
+    async def intake(source: str, tenant_id: str, request: Request, authorization: str | None = Header(default=None)):
+        """Other alert webhooks, per customer with its intake token, in the platform's alert shape."""
+        normalize = sources.WEBHOOKS.get(source)
+        if normalize is None:
+            raise HTTPException(404, "unknown alert source")
         try:
             tenant = platform.tenants.get(tenant_id)
         except KeyError:
             raise HTTPException(404, "unknown tenant") from None
         if not tenant.intake_token_ok(_bearer(authorization)):
             raise HTTPException(401, "bad intake token")
-        payload = await request.json()
-        if not isinstance(payload, dict):
+        try:
+            raw = await request.json()
+        except ValueError:
+            raise HTTPException(422, "expected a JSON object") from None
+        if not isinstance(raw, dict):
             raise HTTPException(422, "expected a JSON object")
         try:
-            triage.check(tenant_id, payload)
-        except triage.IntakeError as exc:
-            raise HTTPException(422, str(exc)) from None
-        intake_id = str(uuid.uuid4())
-        await app.state.bus.publish_intake(tenant_id, intake_id, payload)
-        return {"intake_id": intake_id}
+            payloads = normalize(tenant, raw)
+            for payload in payloads:
+                triage.check(tenant_id, payload)
+        except (triage.IntakeError, KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(422, f"not a {source} alert: {exc}") from None
+        ids = []
+        for payload in payloads:
+            intake_id = str(uuid.uuid4())
+            await app.state.bus.publish_intake(tenant_id, intake_id, payload)
+            ids.append(intake_id)
+        return {"intake_id": ids[0] if len(ids) == 1 else None, "intake_ids": ids}
 
     @app.get("/api/v1/cases", dependencies=[Depends(console_auth)])
-    def list_cases(status: str | None = None, tenant: str | None = None) -> list[dict[str, Any]]:
-        scope = [tenant] if tenant else engineer_scope()
-        if tenant and tenant not in engineer_scope():
-            raise HTTPException(403, "not your customer")
-        with platform.db.scope(scope) as conn:
-            return conn.execute(
-                "SELECT c.id, c.tenant_id, t.name AS tenant_name, c.ref, c.title, c.severity, c.status, c.target, "
-                "c.summary, c.opened_at, c.updated_at, (SELECT count(*) FROM signals s WHERE s.case_id = c.id) AS signals "
-                "FROM cases c JOIN tenants t ON t.id = c.tenant_id "
-                "WHERE (%(status)s::text IS NULL OR c.status = %(status)s) ORDER BY c.updated_at DESC LIMIT 200",
-                {"status": status},
-            ).fetchall()
+    def list_cases(
+        status: str | None = None, tenant: str | None = None, source: str | None = None, q: str | None = None
+    ) -> list[dict[str, Any]]:
+        return views.cases(platform, scoped(tenant), status, source, q)
 
     @app.get("/api/v1/cases/{case_id}", dependencies=[Depends(console_auth)])
     def get_case(case_id: str) -> dict[str, Any]:
-        with platform.db.scope(engineer_scope()) as conn:
-            case = conn.execute(
-                "SELECT c.*, t.name AS tenant_name FROM cases c JOIN tenants t ON t.id = c.tenant_id WHERE c.id = %s",
-                (case_id,),
-            ).fetchone()
-            if case is None:
-                raise HTTPException(404, "no such case")
-            return {
-                "case": case,
-                "signals": conn.execute(
-                    "SELECT alert_id, target, labels, received_at FROM signals WHERE case_id = %s ORDER BY id", (case_id,)
-                ).fetchall(),
-                "proposals": conn.execute(
-                    "SELECT * FROM proposals WHERE case_id = %s ORDER BY created_at", (case_id,)
-                ).fetchall(),
-                "timeline": ledger.for_case(conn, case_id),
-                "ai_cost_usd": float(
-                    conn.execute(
-                        "SELECT coalesce(sum(cost_usd), 0) AS c FROM ai_usage WHERE case_id = %s", (case_id,)
-                    ).fetchone()["c"]
-                ),
-            }
+        detail = views.case_detail(platform, engineer_scope(), _uuid(case_id, "case"))
+        if detail is None:
+            raise HTTPException(404, "no such case")
+        return detail
+
+    @app.post("/api/v1/cases/{case_id}/ask")
+    def ask(case_id: str, body: Question, user: dict = Depends(console_auth)) -> dict[str, Any]:  # noqa: B008
+        who = auth.signature(user, body.who)
+        if not who:
+            raise HTTPException(422, "a question needs a named engineer")
+        if not limiter.allow(user.get("sub", "") + "|" + who):
+            raise HTTPException(429, "too many questions; try again in a minute")
+        answer = views.ask_copilot(platform, engineer_scope(), _uuid(case_id, "case"), body.question.strip(), who)
+        if answer is None:
+            raise HTTPException(404, "no such case")
+        return answer
+
+    @app.get("/api/v1/overview", dependencies=[Depends(console_auth)])
+    def overview(tenant: str | None = None) -> dict[str, Any]:
+        return views.overview(platform, scoped(tenant))
+
+    @app.get("/api/v1/estate/{tenant_id}", dependencies=[Depends(console_auth)])
+    def estate(tenant_id: str, q: str = "", kind: str | None = None) -> dict[str, Any]:
+        return views.estate(platform, scoped(tenant_id)[0], q, kind)
+
+    @app.get("/api/v1/estate/{tenant_id}/assets/{asset_id:path}", dependencies=[Depends(console_auth)])
+    def asset(tenant_id: str, asset_id: str, hops: int = 2) -> dict[str, Any]:
+        detail = views.asset_detail(platform, scoped(tenant_id)[0], asset_id, hops)
+        if detail is None:
+            raise HTTPException(404, "no such asset")
+        return detail
+
+    @app.get("/api/v1/skills", dependencies=[Depends(console_auth)])
+    def skills(tenant: str | None = None) -> dict[str, Any]:
+        return {"library_version": platform.skills.version, "skills": views.skills(platform, scoped(tenant))}
+
+    @app.get("/api/v1/integrations", dependencies=[Depends(console_auth)])
+    def integration_status(tenant: str | None = None) -> list[dict[str, Any]]:
+        return views.integrations(platform, scoped(tenant), sources.configured(platform))
+
+    @app.get("/api/v1/cost", dependencies=[Depends(console_auth)])
+    def cost(tenant: str | None = None, days: int = 30) -> dict[str, Any]:
+        return views.cost(platform, scoped(tenant), days)
 
     async def _decide(proposal_id: str, body: Decision, approve: bool, user: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -196,6 +284,8 @@ def create_app(platform: Platform) -> FastAPI:
                 {
                     "id": t.id,
                     "name": t.name,
+                    "industry": t.industry,
+                    "autonomy": t.autonomy,
                     "diagnosis": t.diagnosis,
                     "ai_spend_month_usd": float(spend),
                     "ai_budget_usd_month": t.ai_budget_usd_month,
@@ -205,11 +295,48 @@ def create_app(platform: Platform) -> FastAPI:
             )
         return out
 
-    if CONSOLE_DIR.is_dir():
-        app.mount("/static", StaticFiles(directory=CONSOLE_DIR), name="static")
+    # ---- lab: the estate simulator, when one is attached ----------------------------------------------------
 
-        @app.get("/", include_in_schema=False)
-        def console() -> FileResponse:
-            return FileResponse(CONSOLE_DIR / "index.html")
+    async def _sim(method: str, path: str) -> Any:
+        if not platform.settings.sim_url:
+            raise HTTPException(404, "no simulator is attached")
+        import httpx
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.request(method, f"{platform.settings.sim_url.rstrip('/')}/_sim/{path}")
+        if r.status_code >= 400:
+            raise HTTPException(r.status_code, r.json().get("detail", "simulator refused"))
+        return r.json()
+
+    @app.get("/api/v1/lab/faults", dependencies=[Depends(console_auth)])
+    async def lab_faults() -> Any:
+        return await _sim("GET", "faults")
+
+    @app.post("/api/v1/lab/faults/{fault}", dependencies=[Depends(console_auth)])
+    async def lab_inject(fault: str) -> Any:
+        return await _sim("POST", f"faults/{fault}")
+
+    @app.post("/api/v1/lab/reset", dependencies=[Depends(console_auth)])
+    async def lab_reset() -> Any:
+        return await _sim("POST", "reset")
+
+    @app.get("/api/v1/lab/events", dependencies=[Depends(console_auth)])
+    async def lab_events() -> Any:
+        return await _sim("GET", "events")
+
+    # ---- the cockpit (a built single-page app) -------------------------------------------------------------
+
+    if COCKPIT_DIR.is_dir():
+        if (COCKPIT_DIR / "assets").is_dir():
+            app.mount("/assets", StaticFiles(directory=COCKPIT_DIR / "assets"), name="assets")
+
+        @app.get("/{path:path}", include_in_schema=False)
+        def cockpit(path: str):
+            if path.startswith(("api/", "auth/")):
+                return JSONResponse({"detail": "Not Found"}, status_code=404)
+            file = (COCKPIT_DIR / path).resolve()
+            if path and file.is_file() and file.is_relative_to(COCKPIT_DIR.resolve()):
+                return FileResponse(file)
+            return FileResponse(COCKPIT_DIR / "index.html")
 
     return app

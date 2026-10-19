@@ -1,0 +1,43 @@
+id: backup/free-space-and-rerun
+version: "1.0.0"
+title: Free repository space and rerun a failed backup job
+summary: >-
+  When a backup job failed for lack of repository space, remove orphaned restore points (backups whose job
+  was deleted) until the repository has room, rerun the job and check it succeeds. Never touches restore
+  points of a job that still exists; escalates when orphans don't free enough.
+risk: low
+approval: not_required
+target:
+  kind: backup_job
+connectors: [veeam]
+max_targets: 1
+params:
+  - name: min_free_ratio
+    type: number
+    default: 0.05
+    min: 0.01
+    max: 0.5
+    description: Keep at least this share of the repository free after the rerun.
+  - name: rerun_gb
+    type: integer
+    default: 100
+    min: 1
+    max: 10000
+    description: Space to allow for the rerun (an incremental pass).
+  - name: max_remove_gb
+    type: integer
+    default: 5000
+    min: 0
+    max: 100000
+    description: Never remove more orphaned restore points than this in one run.
+  - name: verify_minutes
+    type: integer
+    default: 30
+    min: 1
+    max: 240
+    description: How long to wait for the rerun to finish.
+triggers:
+  - alert: veeam-job-failed
+rollback: >-
+  Removed orphaned restore points can't be restored; they belonged to servers whose backup job was already
+  deleted. The evidence lists each one with its size.

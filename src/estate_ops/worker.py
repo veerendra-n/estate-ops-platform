@@ -1,7 +1,8 @@
 """The worker: Temporal activities and the case workflow, the NATS triage consumer, the ledger relay,
-the integrations (HaloPSA, Teams) and NetBox discovery, each when configured.
+event integrations (Teams), alert polling (Veeam, Microsoft 365) and discovery into the estate graph
+(vCenter, Veeam, Intune, Microsoft 365, the edge node's network view, declared services).
 
-One process runs all three. Several workers can run side by side: Temporal hands each activity to one of
+One process runs all of them. Several workers can run side by side: Temporal hands each activity to one of
 them, the durable NATS consumer hands each intake message to one of them, and the relay cursor is updated
 under a row lock.
 """
@@ -20,7 +21,7 @@ from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Worker
 
-from . import integrations, triage
+from . import integrations, sources, triage
 from .bus import Bus
 from .service import Platform, WorkflowError
 from .workflows import CaseInput, CaseWorkflow, workflow_id
@@ -43,9 +44,8 @@ def _activity(name: str, fn):
 
 def activities(platform: Platform) -> list:
     return [
-        _activity("diagnose", platform.diagnose),
-        _activity("start_run", platform.start_run),
-        _activity("poll_run", platform.poll_run),
+        _activity("investigate", platform.investigate),
+        _activity("run_skill", platform.run_skill),
         _activity("decide", platform.decide),
         _activity("expire_approval", platform.expire_approval),
         _activity("escalate", platform.escalate),
@@ -61,7 +61,7 @@ async def start_case(client: Client, platform: Platform, tenant_id: str, case_id
     s = platform.settings
     await client.start_workflow(
         CaseWorkflow.run,
-        CaseInput(tenant_id, case_id, s.run_poll_seconds, s.approval_timeout_hours * 3600),
+        CaseInput(tenant_id, case_id, s.settle_seconds, s.approval_timeout_hours * 3600),
         id=workflow_id(case_id),
         task_queue=s.task_queue,
         id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
@@ -69,10 +69,12 @@ async def start_case(client: Client, platform: Platform, tenant_id: str, case_id
 
 
 def _ingest(platform: Platform, message: dict[str, Any]) -> list[triage.Triaged]:
-    tenant_id = message["tenant_id"]
-    platform.tenants.get(tenant_id)  # KeyError for a tenant removed since the message was queued
-    with platform.db.scope(tenant_id) as conn:
-        return triage.ingest(conn, tenant_id, platform.catalog, message["payload"], message["intake_id"])
+    tenant = platform.tenants.get(message["tenant_id"])  # KeyError for a tenant removed since it was queued
+    s = platform.settings
+    with platform.db.scope(tenant.id) as conn:
+        return triage.ingest(
+            conn, tenant, message["payload"], message["intake_id"], platform.graph, s.correlate_hops, s.correlate_minutes
+        )
 
 
 async def run_triage(platform: Platform, bus: Bus, client: Client, stop: asyncio.Event) -> None:
@@ -94,6 +96,9 @@ async def run_triage(platform: Platform, bus: Bus, client: Client, stop: asyncio
                 log.exception("triage failed; NATS will redeliver")
                 await msg.nak(delay=5)
                 continue
+            if message["payload"].get("source") == "metrics":
+                detail = {"alerts_total": 1, "last_alert": message["payload"].get("alert_id")}
+                await asyncio.to_thread(sources.record, platform, message["tenant_id"], "metrics-alerts", "alerts", True, detail)
             try:
                 # A redelivery after a crash here finds the signals already stored and still-open cases.
                 for r in results:
@@ -147,44 +152,46 @@ async def run_relay(platform: Platform, bus: Bus, stop: asyncio.Event, every: fl
 
 
 def configured_integrations(platform: Platform) -> list:
-    from .integrations.halopsa import HaloClient, HaloPSA
     from .integrations.teams import Teams
 
-    s, out = platform.settings, []
-    if s.halo_url and s.halo_client_id and s.halo_client_secret:
-        out.append(HaloPSA(platform, HaloClient(s.halo_url, s.halo_client_id, s.halo_client_secret, s.halo_tenant)))
-    if any(t.teams_webhook() for t in platform.tenants):
-        out.append(Teams(platform))
-    return out
+    return [Teams(platform)] if any(t.teams_webhook() for t in platform.tenants) else []
 
 
-def discover_all(platform: Platform) -> dict[str, Any]:
-    from .integrations import netbox
-
-    s = platform.settings
-    client = netbox.NetBoxClient(s.netbox_url, s.netbox_token)
-    results: dict[str, Any] = {}
-    for tenant in platform.tenants:
-        try:
-            results[tenant.id] = netbox.discover(client, platform.graph, tenant)
-        except Exception as exc:  # one customer's NetBox trouble must not stop the others
-            log.exception("discovery for %s failed", tenant.id)
-            results[tenant.id] = {"error": f"{type(exc).__name__}: {exc}"}
-    return results
+async def _every(minutes: float, stop: asyncio.Event) -> None:
+    try:
+        await asyncio.wait_for(stop.wait(), timeout=minutes * 60)
+    except TimeoutError:
+        pass
 
 
 async def run_discovery(platform: Platform, stop: asyncio.Event) -> None:
-    every = platform.settings.discovery_interval_minutes * 60
     while not stop.is_set():
-        log.info("discovery: %s", await asyncio.to_thread(discover_all, platform))
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=every)
-        except TimeoutError:
-            pass
+        log.info("discovery: %s", await asyncio.to_thread(sources.discover_all, platform))
+        await _every(platform.settings.discovery_interval_minutes, stop)
+
+
+async def run_polling(platform: Platform, bus: Bus, stop: asyncio.Event) -> None:
+    """Queue what the polled alert sources report, like webhooks. Intake ids are stable per event, so
+    NATS drops a repeat inside its window and triage folds any later one into nothing."""
+    while not stop.is_set():
+        for tenant in platform.tenants:
+            for poller in sources.POLLERS:
+                if poller.connector not in (tenant.connectors or {}):
+                    continue
+                for intake_id, payload in await asyncio.to_thread(sources.poll, platform, tenant, poller):
+                    try:
+                        await bus.publish_intake(tenant.id, intake_id, payload)
+                    except Exception:
+                        log.exception("queueing %s from %s failed; the next poll sends it again", intake_id, poller.name)
+        await _every(platform.settings.poll_interval_minutes, stop)
 
 
 async def run(
-    platform: Platform, stop: asyncio.Event, ready: asyncio.Event | None = None, with_integrations: list | None = None
+    platform: Platform,
+    stop: asyncio.Event,
+    ready: asyncio.Event | None = None,
+    with_integrations: list | None = None,
+    with_feeds: bool = True,
 ) -> None:
     s = platform.settings
     client = await temporal_client(platform)
@@ -207,8 +214,9 @@ async def run(
             for integration in chosen:
                 tasks.append(asyncio.create_task(integrations.run(platform, bus, integration, stop)))
                 log.info("integration %s on", integration.name)
-            if s.netbox_url and s.netbox_token:
+            if with_feeds:
                 tasks.append(asyncio.create_task(run_discovery(platform, stop)))
+                tasks.append(asyncio.create_task(run_polling(platform, bus, stop)))
             log.info(
                 "worker started (queue %s, model %s)",
                 s.task_queue,

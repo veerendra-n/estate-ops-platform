@@ -1,26 +1,30 @@
-# Local stack: Postgres, Neo4j Community, NATS JetStream, Temporal (with its web UI), the API with the
-# console, the worker, and fakes for Semaphore, OpenObserve, HaloPSA, Teams and NetBox. Copy .env.example to .env first.
-# Memory limits are sized for a laptop and for one small platform instance; raise them per real load.
+# The whole platform on one machine (a GitHub Codespace, a laptop or a small VM), with the estate simulator
+# standing in for two customers' vCenter, Veeam, Microsoft 365, Fleet and edge nodes.
+#
+#   platform   api (cockpit + intake), worker (agents, workflow, discovery, polling), migrate (once)
+#   state      postgres (cases, ledger, RLS), neo4j (estate graph), nats (intake and events), temporal (+ ui)
+#   policy     opa (policy/autonomy.rego)
+#   telemetry  otel-collector -> victoriametrics + victorialogs, vmalert (alerts/*.yml) -> api intake
+#   estate     sim (src/estate_sim)
+#
+# Run scripts/dev-env.sh once to create .env with random local secrets, then `docker compose up -d --build`.
+# Memory limits fit a 4-core, 16 GB Codespace with room to spare.
 x-platform: &platform
   build: .
   image: estate-ops-platform:dev
   env_file: .env
   environment:
-    DATABASE_URL: postgresql://estate:${POSTGRES_PASSWORD:?set it in .env}@postgres:5432/estate_ops
+    DATABASE_URL: postgresql://estate:${POSTGRES_PASSWORD:?run scripts/dev-env.sh}@postgres:5432/estate_ops
     NEO4J_URL: bolt://neo4j:7687
     NEO4J_USER: neo4j
-    NEO4J_PASSWORD: ${NEO4J_PASSWORD:?set it in .env}
+    NEO4J_PASSWORD: ${NEO4J_PASSWORD:?run scripts/dev-env.sh}
     NATS_URL: nats://nats:4222
     TEMPORAL_ADDRESS: temporal:7233
-    SEMAPHORE_URL: ${SEMAPHORE_URL:-http://fakes:8090/semaphore}
-    OPENOBSERVE_URL: ${OPENOBSERVE_URL:-http://fakes:8090/openobserve}
-    # Integrations default to the fakes too, so the demo shows tickets and cards (see localhost:8090/_inbox).
-    HALO_URL: ${HALO_URL:-http://fakes:8090/halo}
-    HALO_CLIENT_ID: ${HALO_CLIENT_ID:-demo}
-    HALO_CLIENT_SECRET: ${HALO_CLIENT_SECRET:-demo}
-    LAB_TEAMS_WEBHOOK: ${LAB_TEAMS_WEBHOOK:-http://fakes:8090/teams/lab}
-    NETBOX_URL: ${NETBOX_URL:-http://fakes:8090/netbox}
-    NETBOX_TOKEN: ${NETBOX_TOKEN:-demo}
+    OPA_URL: http://opa:8181
+    METRICS_URL: http://victoriametrics:8428
+    LOGS_URL: http://victorialogs:9428
+    SIM_URL: http://sim:8095
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   depends_on:
     migrate:
       condition: service_completed_successfully
@@ -28,14 +32,17 @@ x-platform: &platform
       condition: service_started
     temporal:
       condition: service_healthy
-  mem_limit: 512m
+    opa:
+      condition: service_started
+  mem_limit: 768m
+  restart: unless-stopped
 
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: estate
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run scripts/dev-env.sh}
       POSTGRES_DB: estate_ops
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -44,11 +51,12 @@ services:
       interval: 2s
       retries: 30
     mem_limit: 512m
+    restart: unless-stopped
 
   neo4j:
     image: neo4j:5.26.32-community
     environment:
-      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?set it in .env}
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?run scripts/dev-env.sh}
       NEO4J_server_memory_heap_max__size: 512m
       NEO4J_server_memory_pagecache_size: 256m
     volumes:
@@ -58,8 +66,9 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null"]
       interval: 3s
-      retries: 40
+      retries: 60
     mem_limit: 1g
+    restart: unless-stopped
 
   nats:
     image: nats:2.11-alpine
@@ -67,6 +76,7 @@ services:
     volumes:
       - natsdata:/data
     mem_limit: 256m
+    restart: unless-stopped
 
   temporal:
     # Temporal server on the same Postgres (its own temporal and temporal_visibility databases).
@@ -75,7 +85,7 @@ services:
       DB: postgres12
       DB_PORT: 5432
       POSTGRES_USER: estate
-      POSTGRES_PWD: ${POSTGRES_PASSWORD:?set it in .env}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:?run scripts/dev-env.sh}
       POSTGRES_SEEDS: postgres
     depends_on:
       postgres:
@@ -83,8 +93,9 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "temporal operator cluster health --address $(hostname -i):7233 | grep -q SERVING"]
       interval: 3s
-      retries: 60
+      retries: 80
     mem_limit: 768m
+    restart: unless-stopped
 
   temporal-ui:
     image: temporalio/ui:2.37.0
@@ -95,35 +106,110 @@ services:
     depends_on:
       - temporal
     mem_limit: 256m
+    restart: unless-stopped
+
+  opa:
+    image: openpolicyagent/opa:1.10.1
+    command: ["run", "--server", "--addr", "0.0.0.0:8181", "--log-level", "error", "/policy/autonomy.rego"]
+    volumes:
+      - ./policy:/policy:ro
+    mem_limit: 128m
+    restart: unless-stopped
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.115.0
+    command: ["-retentionPeriod=30d", "-storageDataPath=/data", "-search.latencyOffset=5s"]
+    volumes:
+      - vmdata:/data
+    ports:
+      - "127.0.0.1:8428:8428"   # VMUI at /vmui, to look at the metrics
+    mem_limit: 512m
+    restart: unless-stopped
+
+  victorialogs:
+    image: victoriametrics/victoria-logs:v1.51.1
+    command: ["-retentionPeriod=14d", "-storageDataPath=/data"]
+    volumes:
+      - vldata:/data
+    ports:
+      - "127.0.0.1:9428:9428"   # its UI at /select/vmui
+    mem_limit: 256m
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.123.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./telemetry/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      - victoriametrics
+      - victorialogs
+      - sim
+    mem_limit: 256m
+    restart: unless-stopped
+
+  vmalert:
+    image: victoriametrics/vmalert:v1.115.0
+    command:
+      - -rule=/rules/*.yml
+      - -datasource.url=http://victoriametrics:8428
+      - -remoteWrite.url=http://victoriametrics:8428
+      - -remoteRead.url=http://victoriametrics:8428
+      - -notifier.url=http://api:8080/api/v1/intake/alertmanager
+      - -notifier.bearerToken=${ALERTS_INTAKE_TOKEN:?run scripts/dev-env.sh}
+      - -evaluationInterval=15s
+      - -external.url=http://localhost:8428/vmui
+    volumes:
+      - ./alerts:/rules:ro
+    depends_on:
+      - victoriametrics
+      - api
+    mem_limit: 128m
+    restart: unless-stopped
+
+  sim:
+    image: estate-ops-platform:dev
+    build: .
+    entrypoint: ["uvicorn", "estate_sim.app:app", "--host", "0.0.0.0", "--port", "8095"]
+    environment:
+      OTLP_LOGS_URL: http://otel-collector:4318/v1/logs
+    mem_limit: 384m
+    restart: unless-stopped
 
   migrate:
     <<: *platform
-    entrypoint: ["sh", "-c", "python -m estate_ops migrate && python -m estate_ops seed"]
+    command: ["migrate"]
     depends_on:
       postgres:
         condition: service_healthy
       neo4j:
         condition: service_healthy
+    restart: "no"
 
   api:
     <<: *platform
     command: ["api", "--port", "8080"]
     ports:
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"   # the cockpit; Codespaces forwards it
 
   worker:
     <<: *platform
     command: ["worker"]
-
-  fakes:
-    image: estate-ops-platform:dev
-    build: .
-    entrypoint: ["uvicorn", "dev.fakes:app", "--host", "0.0.0.0", "--port", "8090"]
-    ports:
-      - "127.0.0.1:8090:8090"
-    mem_limit: 256m
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_started
+      temporal:
+        condition: service_healthy
+      opa:
+        condition: service_started
+      sim:
+        condition: service_started
 
 volumes:
   pgdata:
   neo4jdata:
   natsdata:
+  vmdata:
+  vldata:
