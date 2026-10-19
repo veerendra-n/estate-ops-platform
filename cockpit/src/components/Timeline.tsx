@@ -358,6 +358,20 @@ export function TimelineEntry({ e, tenant }: { e: LedgerEntry; tenant: string })
           cleared {str(b, "alertname") ?? "alert"} {str(b, "target") && <code>{str(b, "target")}</code>}
         </Line>
       );
+    case "cases_merged":
+      return (
+        <Line entry={e} icon={<BellPlus size={13} />}>
+          merged <b>{str(b, "merged") ?? "a related case"}</b> into this case, linked through{" "}
+          <code>{str(b, "via") ?? "a shared asset"}</code>
+        </Line>
+      );
+    case "merged_into":
+      return (
+        <Line entry={e} icon={<BellPlus size={13} />}>
+          merged this case into <b>{str(b, "into") ?? "a related case"}</b>, linked through{" "}
+          <code>{str(b, "via") ?? "a shared asset"}</code>
+        </Line>
+      );
     case "investigation":
     case "diagnosis":
       return <Investigation e={e} tenant={tenant} />;

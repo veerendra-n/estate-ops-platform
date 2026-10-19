@@ -28,7 +28,8 @@ the account that owns the codespace; stop it when you are done (`scripts/demo.sh
 1. In the cockpit open **Lab**, pick **Contoso**, and start the fault **checkout-slow**. A BI reporting VM
    (CTO-BI-ETL01) starts a full reload on the datastore it shares with the shop's SQL server.
 2. Within a minute or two the alert rules fire: datastore latency, SQL I/O waits, checkout latency and more.
-   They arrive as one case under **Cases**, not twenty.
+   They end up as one case under **Cases**, not twenty: the slow services may open cases of their own for a
+   moment, and those merge into one when the datastore under all of them alerts.
 3. Open the case. The timeline shows the investigation (which asset, which evidence), the proposal
    `vmware/rebalance-datastore` with its blast radius and dry-run plan (move CTO-BI-ETL01 to a quiet,
    non-critical datastore), and the policy decision: approval needed, because the skill touches storage that
