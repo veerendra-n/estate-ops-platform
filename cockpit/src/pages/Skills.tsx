@@ -145,7 +145,7 @@ export default function Skills() {
         title="Skills"
         sub={
           <>
-            Tested automations from the ops-foundation library{data && <> · library <code>{data.library_version}</code></>}. Policy decides how
+            Tested skills in this platform's library{data && <> · library <code>{data.library_version}</code></>}. Policy decides how
             much autonomy each gets per customer.
           </>
         }

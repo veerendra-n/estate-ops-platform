@@ -112,7 +112,7 @@ function modeFor(t: Tenant, skill: SkillDef): [string, string] {
 
 function skillsView(tenant: string | null) {
   return {
-    library_version: "ops-foundation 2026.10.2",
+    library_version: "2026.10.2",
     skills: SKILLS.map(({ stats, ...s }) => ({
       ...s,
       tenants: TENANTS.filter((t) => !tenant || t.id === tenant).map((t) => {
