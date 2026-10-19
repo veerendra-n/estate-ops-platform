@@ -1,0 +1,407 @@
+# Business services of Contoso Retail, as the customer declares them: which servers make up each service, who owns
+# it and how critical it is. No API knows this, and agents and policy need it (blast radius, never moving a
+# critical service's VM without a person). Reviewed with the customer at onboarding and each service review.
+tenant: contoso
+services:
+- name: Checkout
+  owner: Digital
+  critical: true
+  users: 1800
+  hours: 24x7
+  servers:
+  - CTO-SHOP-WEB01
+  - CTO-SHOP-WEB02
+  - CTO-SHOP-WEB03
+  - CTO-SHOP-WEB04
+  - CTO-SHOP-API01
+  - CTO-SHOP-API02
+  - CTO-SHOP-API03
+  - CTO-SHOP-SQL01
+- name: Online shop
+  owner: Digital
+  critical: true
+  users: 1800
+  hours: 24x7
+  servers:
+  - CTO-SHOP-CMS01
+  - CTO-SHOP-CMS02
+  - CTO-SHOP-SEARCH01
+- name: Store POS
+  owner: Retail ops
+  critical: true
+  users: 600
+  hours: Mon-Sun 07:00-23:00
+  servers:
+  - CTO-POS-APP01
+  - CTO-POS-APP02
+  - CTO-POS-SQL01
+- name: Finance ERP
+  owner: Finance
+  critical: true
+  users: 420
+  hours: Mon-Fri 07:00-20:00
+  servers:
+  - CTO-ERP-APP01
+  - CTO-ERP-APP02
+  - CTO-ERP-SQL01
+- name: File shares
+  owner: IT
+  critical: false
+  users: 2600
+  servers:
+  - CTO-FS01
+  - CTO-FS02
+- name: Identity
+  owner: IT
+  critical: true
+  users: 3000
+  hours: 24x7
+  servers:
+  - CTO-DC01
+  - CTO-DC02
+- name: Sales analytics
+  owner: Finance
+  critical: false
+  users: 40
+  servers:
+  - CTO-BI-ETL01
+  - CTO-BI-SQL01
+- name: Intranet
+  owner: IT
+  critical: false
+  users: 130
+  servers:
+  - CTO-APP001
+  - CTO-APP002
+  - CTO-APP003
+  - CTO-APP004
+  - CTO-APP005
+- name: HR portal
+  owner: IT
+  critical: false
+  users: 769
+  servers:
+  - CTO-APP006
+  - CTO-APP007
+- name: Timesheets
+  owner: IT
+  critical: false
+  users: 531
+  servers:
+  - CTO-APP008
+- name: Expenses
+  owner: IT
+  critical: false
+  users: 461
+  servers:
+  - CTO-APP009
+  - CTO-APP010
+- name: Document management
+  owner: IT
+  critical: false
+  users: 103
+  servers:
+  - CTO-APP011
+  - CTO-APP012
+- name: CRM
+  owner: IT
+  critical: false
+  users: 791
+  servers:
+  - CTO-APP013
+  - CTO-APP014
+  - CTO-APP015
+  - CTO-APP016
+- name: Contract register
+  owner: IT
+  critical: false
+  users: 825
+  servers:
+  - CTO-APP017
+  - CTO-APP018
+  - CTO-APP019
+  - CTO-APP020
+- name: Print management
+  owner: IT
+  critical: false
+  users: 582
+  servers:
+  - CTO-APP021
+- name: Visitor booking
+  owner: IT
+  critical: false
+  users: 480
+  servers:
+  - CTO-APP022
+  - CTO-APP023
+  - CTO-APP024
+  - CTO-APP025
+  - CTO-APP026
+- name: Fleet tracking
+  owner: IT
+  critical: false
+  users: 495
+  servers:
+  - CTO-APP027
+  - CTO-APP028
+  - CTO-APP029
+  - CTO-APP030
+- name: Asset register
+  owner: IT
+  critical: false
+  users: 566
+  servers:
+  - CTO-APP031
+  - CTO-APP032
+  - CTO-APP033
+- name: Procurement
+  owner: IT
+  critical: false
+  users: 851
+  servers:
+  - CTO-APP034
+- name: Learning portal
+  owner: IT
+  critical: false
+  users: 101
+  servers:
+  - CTO-APP035
+- name: Quality management
+  owner: IT
+  critical: false
+  users: 835
+  servers:
+  - CTO-APP036
+- name: Service catalogue
+  owner: IT
+  critical: false
+  users: 487
+  servers:
+  - CTO-APP037
+  - CTO-APP038
+  - CTO-APP039
+  - CTO-APP040
+  - CTO-APP041
+- name: Reporting
+  owner: IT
+  critical: false
+  users: 447
+  servers:
+  - CTO-APP042
+  - CTO-APP043
+  - CTO-APP044
+  - CTO-APP045
+  - CTO-APP046
+- name: Data warehouse
+  owner: IT
+  critical: false
+  users: 624
+  servers:
+  - CTO-APP047
+  - CTO-APP048
+  - CTO-APP049
+  - CTO-APP050
+  - CTO-APP051
+- name: Integration bus
+  owner: IT
+  critical: false
+  users: 351
+  servers:
+  - CTO-APP052
+  - CTO-APP053
+  - CTO-APP054
+- name: Mail relay
+  owner: IT
+  critical: false
+  users: 793
+  servers:
+  - CTO-APP055
+  - CTO-APP056
+  - CTO-APP057
+  - CTO-APP058
+- name: License server
+  owner: IT
+  critical: false
+  users: 702
+  servers:
+  - CTO-APP059
+  - CTO-APP060
+  - CTO-APP061
+- name: Antivirus console
+  owner: IT
+  critical: false
+  users: 670
+  servers:
+  - CTO-APP062
+  - CTO-APP063
+  - CTO-APP064
+  - CTO-APP065
+- name: Monitoring proxy
+  owner: IT
+  critical: false
+  users: 483
+  servers:
+  - CTO-APP066
+  - CTO-APP067
+  - CTO-APP068
+  - CTO-APP069
+- name: Jump hosts
+  owner: IT
+  critical: false
+  users: 108
+  servers:
+  - CTO-APP070
+- name: Build agents
+  owner: IT
+  critical: false
+  users: 309
+  servers:
+  - CTO-APP071
+- name: Test environment
+  owner: IT
+  critical: false
+  users: 866
+  servers:
+  - CTO-APP072
+  - CTO-APP073
+  - CTO-APP074
+  - CTO-APP075
+  - CTO-APP076
+- name: Archive
+  owner: IT
+  critical: false
+  users: 854
+  servers:
+  - CTO-APP077
+  - CTO-APP078
+  - CTO-APP079
+  - CTO-APP080
+- name: Scanning
+  owner: IT
+  critical: false
+  users: 141
+  servers:
+  - CTO-APP081
+  - CTO-APP082
+  - CTO-APP083
+  - CTO-APP084
+- name: Facilities
+  owner: IT
+  critical: false
+  users: 101
+  servers:
+  - CTO-APP085
+  - CTO-APP086
+  - CTO-APP087
+- name: Telephony
+  owner: IT
+  critical: false
+  users: 898
+  servers:
+  - CTO-APP088
+  - CTO-APP089
+- name: Wi-Fi controller
+  owner: IT
+  critical: false
+  users: 583
+  servers:
+  - CTO-APP090
+  - CTO-APP091
+- name: Badge system
+  owner: IT
+  critical: false
+  users: 741
+  servers:
+  - CTO-APP092
+  - CTO-APP093
+  - CTO-APP094
+  - CTO-APP095
+- name: Kiosk management
+  owner: IT
+  critical: false
+  users: 334
+  servers:
+  - CTO-APP096
+  - CTO-APP097
+  - CTO-APP098
+  - CTO-APP099
+  - CTO-APP100
+- name: Survey tool
+  owner: IT
+  critical: false
+  users: 493
+  servers:
+  - CTO-APP101
+  - CTO-APP102
+- name: Knowledge base
+  owner: IT
+  critical: false
+  users: 361
+  servers:
+  - CTO-APP103
+  - CTO-APP104
+  - CTO-APP105
+  - CTO-APP106
+  - CTO-APP107
+- name: Ticket archive
+  owner: IT
+  critical: false
+  users: 683
+  servers:
+  - CTO-APP108
+  - CTO-APP109
+  - CTO-APP110
+  - CTO-APP111
+- name: PDF services
+  owner: IT
+  critical: false
+  users: 178
+  servers:
+  - CTO-APP112
+  - CTO-APP113
+  - CTO-APP114
+- name: Translation
+  owner: IT
+  critical: false
+  users: 765
+  servers:
+  - CTO-APP115
+  - CTO-APP116
+  - CTO-APP117
+- name: GIS
+  owner: IT
+  critical: false
+  users: 501
+  servers:
+  - CTO-APP118
+  - CTO-APP119
+  - CTO-APP120
+  - CTO-APP121
+- name: Pricing engine
+  owner: IT
+  critical: false
+  users: 164
+  servers:
+  - CTO-APP122
+  - CTO-APP123
+- name: Loyalty
+  owner: IT
+  critical: false
+  users: 705
+  servers:
+  - CTO-APP124
+- name: Payments gateway
+  owner: IT
+  critical: false
+  users: 514
+  servers:
+  - CTO-APP125
+- name: Recruitment
+  owner: IT
+  critical: false
+  users: 765
+  servers:
+  - CTO-APP126
+  - CTO-APP127
+  - CTO-APP128
+  - CTO-APP129

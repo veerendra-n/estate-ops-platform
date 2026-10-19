@@ -1,0 +1,13 @@
+defaults:
+  mount: "C:"
+  threshold: 0.9
+cases:
+  - name: a full volume is cleaned
+    facts: {host: H, mount: "C:", volume: {mount: "C:", used_ratio: 0.95, free_gb: 6}}
+    expect: cleanup_disk
+  - name: a volume under the threshold is left alone
+    facts: {host: H, mount: "C:", volume: {mount: "C:", used_ratio: 0.6, free_gb: 60}}
+    expect: none
+  - name: a missing volume goes to an engineer
+    facts: {host: H, mount: "D:", volume: null}
+    expect: escalate

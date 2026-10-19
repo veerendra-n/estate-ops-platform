@@ -1,0 +1,101 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: ci-only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-retries 30
+      neo4j:
+        image: neo4j:5.26.32-community
+        env:
+          NEO4J_AUTH: neo4j/ci-only-password
+        ports: ["7687:7687"]
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:ci-only@localhost:5432/postgres
+      TEST_NEO4J_URL: bolt://localhost:7687
+      TEST_NEO4J_PASSWORD: ci-only-password
+      TEST_NATS_URL: nats://localhost:4222
+      TEST_TEMPORAL_ADDRESS: localhost:7233
+      TEST_OPA_URL: http://localhost:8181
+    steps:
+      - uses: actions/checkout@v4
+      # Service containers can't take a command or a checked-out volume, so these run here.
+      - run: docker run -d --name nats -p 4222:4222 nats:2.11-alpine -js
+      - run: docker run -d --name temporal -p 7233:7233 temporalio/temporal:1.9.1 server start-dev --ip 0.0.0.0
+      - run: docker run -d --name opa -p 8181:8181 -v "$PWD/policy:/policy:ro" openpolicyagent/opa:1.10.1 run --server --addr 0.0.0.0:8181 /policy/autonomy.rego
+      - name: Wait for Neo4j, NATS, Temporal and OPA
+        run: |
+          for port in 7687 4222 7233 8181; do
+            timeout 120 bash -c "until (echo > /dev/tcp/localhost/$port) 2>/dev/null; do sleep 1; done"
+          done
+          timeout 120 bash -c 'until docker exec temporal temporal operator cluster health 2>/dev/null | grep -q SERVING; do sleep 1; done'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e '.[dev]'
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: python -m pytest -q
+
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Policy tests, strict check and formatting
+        run: |
+          docker run --rm -v "$PWD/policy:/policy:ro" openpolicyagent/opa:1.10.1 test -v /policy
+          docker run --rm -v "$PWD/policy:/policy:ro" openpolicyagent/opa:1.10.1 check --strict /policy
+          test -z "$(docker run --rm -v "$PWD/policy:/policy:ro" openpolicyagent/opa:1.10.1 fmt -l /policy)"
+
+  cockpit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cockpit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: cockpit/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build
+
+  stack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t estate-ops-platform:ci .
+      - name: Check the compose stack, alert rules and scripts
+        run: |
+          scripts/dev-env.sh
+          docker compose config -q
+          docker run --rm -v "$PWD/alerts:/rules:ro" victoriametrics/vmalert:v1.115.0 -rule=/rules/*.yml -dryRun
+          bash -n scripts/*.sh
+          shellcheck scripts/*.sh
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,34 @@
+{
+  // GitHub Codespaces: the whole platform with two simulated customers, in one 4-core codespace.
+  // On create it installs the Python package and writes .env with random local secrets; on every start it
+  // brings the stack up with Docker Compose. The cockpit is on port 8080 (see "Ports"); sign in with the
+  // CONSOLE_TOKEN printed by scripts/demo.sh. Add ANTHROPIC_API_KEY as a Codespaces secret to turn the
+  // model-backed investigator and the copilot on; without it the deterministic graph walk runs.
+  "name": "estate-ops-platform",
+  "build": { "dockerfile": "Dockerfile" },
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" }
+  },
+  "hostRequirements": { "cpus": 4, "memory": "16gb", "storage": "32gb" },
+  "secrets": {
+    "ANTHROPIC_API_KEY": {
+      "description": "Optional. A Claude API key for the investigator and copilot agents.",
+      "documentationUrl": "https://docs.claude.com/en/api/overview"
+    }
+  },
+  "postCreateCommand": "pip install --user -e '.[dev]' && scripts/dev-env.sh && (cd cockpit && npm ci --no-audit --no-fund)",
+  "postStartCommand": "scripts/demo.sh up",
+  "forwardPorts": [8080, 8233, 7474, 8428, 9428],
+  "portsAttributes": {
+    "8080": { "label": "Cockpit", "onAutoForward": "openBrowser" },
+    "8233": { "label": "Temporal (case workflows)", "onAutoForward": "silent" },
+    "7474": { "label": "Neo4j Browser (estate graph)", "onAutoForward": "silent" },
+    "8428": { "label": "VictoriaMetrics", "onAutoForward": "silent" },
+    "9428": { "label": "VictoriaLogs", "onAutoForward": "silent" }
+  },
+  "customizations": {
+    "codespaces": { "openFiles": ["README.md"] },
+    "vscode": { "extensions": ["ms-python.python", "charliermarsh.ruff", "tsandall.opa"] }
+  }
+}

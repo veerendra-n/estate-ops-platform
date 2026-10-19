@@ -1,0 +1,55 @@
+defaults:
+  latency_threshold_ms: 20
+  min_share: 0.4
+  max_destination_latency_ms: 8
+  verify_minutes: 3
+cases:
+  - name: a runaway ETL VM is moved to the fastest datastore with room
+    facts:
+      datastore: CTO-DS-CRIT-02
+      latency_ms: 38.2
+      vms:
+        - {name: CTO-BI-ETL01, id: vm-1, iops: 30000, critical: false, services: [Sales analytics]}
+        - {name: CTO-SHOP-SQL01, id: vm-2, iops: 4200, critical: true, services: [Checkout]}
+      candidates:
+        - {name: CTO-DS-CRIT-01, id: ds-1, latency_ms: 2.0, free_gb: 7000, critical: true}
+        - {name: CTO-DS-GEN-02, id: ds-4, latency_ms: 2.4, free_gb: 20000, critical: false}
+        - {name: CTO-DS-GEN-01, id: ds-3, latency_ms: 3.6, free_gb: 15000, critical: false}
+    expect: storage_vmotion
+    plan: [{vm: CTO-BI-ETL01, to: CTO-DS-GEN-02}]
+  - name: a healthy datastore needs nothing
+    facts: {datastore: X, latency_ms: 3.1, vms: [], candidates: []}
+    expect: none
+  - name: the busy VM runs a critical service, so a person decides
+    facts:
+      datastore: X
+      latency_ms: 40
+      vms:
+        - {name: SQL, id: vm-2, iops: 9000, critical: true, services: [Checkout]}
+        - {name: WEB, id: vm-3, iops: 300, critical: false, services: []}
+      candidates: [{name: Y, id: ds-2, latency_ms: 2, free_gb: 5000}]
+    expect: escalate
+  - name: load spread over many VMs is not this skill's answer
+    facts:
+      datastore: X
+      latency_ms: 30
+      vms:
+        - {name: A, id: a, iops: 1000, critical: false, services: []}
+        - {name: B, id: b, iops: 1000, critical: false, services: []}
+        - {name: C, id: c, iops: 1000, critical: false, services: []}
+      candidates: [{name: Y, id: ds-2, latency_ms: 2, free_gb: 5000}]
+    expect: escalate
+  - name: nowhere fast enough to go
+    facts:
+      datastore: X
+      latency_ms: 30
+      vms: [{name: A, id: a, iops: 9000, critical: false, services: []}]
+      candidates: [{name: Y, id: ds-2, latency_ms: 12, free_gb: 5000}, {name: Z, id: ds-3, latency_ms: 2, free_gb: 50}]
+    expect: escalate
+  - name: only critical datastores are fast enough
+    facts:
+      datastore: X
+      latency_ms: 30
+      vms: [{name: A, id: a, iops: 9000, critical: false, services: []}]
+      candidates: [{name: Y, id: ds-2, latency_ms: 2, free_gb: 5000, critical: true}]
+    expect: escalate

@@ -1,0 +1,391 @@
+# Business services of Fabrikam Health, as the customer declares them: which servers make up each service, who owns
+# it and how critical it is. No API knows this, and agents and policy need it (blast radius, never moving a
+# critical service's VM without a person). Reviewed with the customer at onboarding and each service review.
+tenant: fabrikam
+services:
+- name: EHR
+  owner: Clinical systems
+  critical: true
+  users: 2200
+  hours: 24x7
+  servers:
+  - FAB-EHR-WEB01
+  - FAB-EHR-WEB02
+  - FAB-EHR-APP01
+  - FAB-EHR-APP02
+  - FAB-EHR-SQL01
+- name: PACS imaging
+  owner: Radiology
+  critical: true
+  users: 300
+  hours: 24x7
+  servers:
+  - FAB-PACS-APP01
+  - FAB-PACS-DB01
+- name: Patient portal
+  owner: Digital
+  critical: false
+  users: 9000
+  hours: 24x7
+  servers:
+  - FAB-PORTAL-WEB01
+  - FAB-PORTAL-WEB02
+- name: Payroll
+  owner: HR
+  critical: false
+  users: 35
+  hours: Mon-Fri 08:00-18:00
+  servers:
+  - FAB-PAY-APP01
+  - FAB-PAY-DB01
+- name: Identity
+  owner: IT
+  critical: true
+  users: 3000
+  hours: 24x7
+  servers:
+  - FAB-DC01
+  - FAB-DC02
+- name: File shares
+  owner: IT
+  critical: false
+  users: 2500
+  servers:
+  - FAB-FS01
+- name: Intranet
+  owner: IT
+  critical: false
+  users: 139
+  servers:
+  - FAB-APP001
+- name: HR portal
+  owner: IT
+  critical: false
+  users: 531
+  servers:
+  - FAB-APP002
+  - FAB-APP003
+  - FAB-APP004
+  - FAB-APP005
+  - FAB-APP006
+- name: Timesheets
+  owner: IT
+  critical: false
+  users: 182
+  servers:
+  - FAB-APP007
+- name: Expenses
+  owner: IT
+  critical: false
+  users: 311
+  servers:
+  - FAB-APP008
+  - FAB-APP009
+  - FAB-APP010
+  - FAB-APP011
+- name: Document management
+  owner: IT
+  critical: false
+  users: 411
+  servers:
+  - FAB-APP012
+  - FAB-APP013
+  - FAB-APP014
+- name: CRM
+  owner: IT
+  critical: false
+  users: 327
+  servers:
+  - FAB-APP015
+  - FAB-APP016
+  - FAB-APP017
+  - FAB-APP018
+- name: Contract register
+  owner: IT
+  critical: false
+  users: 428
+  servers:
+  - FAB-APP019
+  - FAB-APP020
+  - FAB-APP021
+  - FAB-APP022
+  - FAB-APP023
+- name: Print management
+  owner: IT
+  critical: false
+  users: 875
+  servers:
+  - FAB-APP024
+  - FAB-APP025
+  - FAB-APP026
+  - FAB-APP027
+  - FAB-APP028
+- name: Visitor booking
+  owner: IT
+  critical: false
+  users: 473
+  servers:
+  - FAB-APP029
+  - FAB-APP030
+  - FAB-APP031
+- name: Fleet tracking
+  owner: IT
+  critical: false
+  users: 505
+  servers:
+  - FAB-APP032
+  - FAB-APP033
+  - FAB-APP034
+  - FAB-APP035
+- name: Asset register
+  owner: IT
+  critical: false
+  users: 775
+  servers:
+  - FAB-APP036
+  - FAB-APP037
+- name: Procurement
+  owner: IT
+  critical: false
+  users: 549
+  servers:
+  - FAB-APP038
+  - FAB-APP039
+  - FAB-APP040
+  - FAB-APP041
+  - FAB-APP042
+- name: Learning portal
+  owner: IT
+  critical: false
+  users: 80
+  servers:
+  - FAB-APP043
+  - FAB-APP044
+  - FAB-APP045
+  - FAB-APP046
+  - FAB-APP047
+- name: Quality management
+  owner: IT
+  critical: false
+  users: 457
+  servers:
+  - FAB-APP048
+- name: Service catalogue
+  owner: IT
+  critical: false
+  users: 365
+  servers:
+  - FAB-APP049
+  - FAB-APP050
+- name: Reporting
+  owner: IT
+  critical: false
+  users: 482
+  servers:
+  - FAB-APP051
+  - FAB-APP052
+- name: Data warehouse
+  owner: IT
+  critical: false
+  users: 307
+  servers:
+  - FAB-APP053
+  - FAB-APP054
+- name: Integration bus
+  owner: IT
+  critical: false
+  users: 283
+  servers:
+  - FAB-APP055
+- name: Mail relay
+  owner: IT
+  critical: false
+  users: 250
+  servers:
+  - FAB-APP056
+  - FAB-APP057
+  - FAB-APP058
+  - FAB-APP059
+  - FAB-APP060
+- name: License server
+  owner: IT
+  critical: false
+  users: 237
+  servers:
+  - FAB-APP061
+- name: Antivirus console
+  owner: IT
+  critical: false
+  users: 599
+  servers:
+  - FAB-APP062
+  - FAB-APP063
+  - FAB-APP064
+  - FAB-APP065
+- name: Monitoring proxy
+  owner: IT
+  critical: false
+  users: 248
+  servers:
+  - FAB-APP066
+  - FAB-APP067
+  - FAB-APP068
+  - FAB-APP069
+- name: Jump hosts
+  owner: IT
+  critical: false
+  users: 719
+  servers:
+  - FAB-APP070
+- name: Build agents
+  owner: IT
+  critical: false
+  users: 482
+  servers:
+  - FAB-APP071
+- name: Test environment
+  owner: IT
+  critical: false
+  users: 229
+  servers:
+  - FAB-APP072
+  - FAB-APP073
+- name: Archive
+  owner: IT
+  critical: false
+  users: 872
+  servers:
+  - FAB-APP074
+  - FAB-APP075
+- name: Scanning
+  owner: IT
+  critical: false
+  users: 734
+  servers:
+  - FAB-APP076
+  - FAB-APP077
+  - FAB-APP078
+  - FAB-APP079
+  - FAB-APP080
+- name: Facilities
+  owner: IT
+  critical: false
+  users: 787
+  servers:
+  - FAB-APP081
+  - FAB-APP082
+  - FAB-APP083
+- name: Telephony
+  owner: IT
+  critical: false
+  users: 310
+  servers:
+  - FAB-APP084
+  - FAB-APP085
+  - FAB-APP086
+  - FAB-APP087
+  - FAB-APP088
+- name: Wi-Fi controller
+  owner: IT
+  critical: false
+  users: 645
+  servers:
+  - FAB-APP089
+- name: Badge system
+  owner: IT
+  critical: false
+  users: 197
+  servers:
+  - FAB-APP090
+  - FAB-APP091
+- name: Kiosk management
+  owner: IT
+  critical: false
+  users: 732
+  servers:
+  - FAB-APP092
+  - FAB-APP093
+  - FAB-APP094
+- name: Survey tool
+  owner: IT
+  critical: false
+  users: 778
+  servers:
+  - FAB-APP095
+  - FAB-APP096
+  - FAB-APP097
+  - FAB-APP098
+  - FAB-APP099
+- name: Knowledge base
+  owner: IT
+  critical: false
+  users: 438
+  servers:
+  - FAB-APP100
+  - FAB-APP101
+- name: Ticket archive
+  owner: IT
+  critical: false
+  users: 551
+  servers:
+  - FAB-APP102
+  - FAB-APP103
+  - FAB-APP104
+  - FAB-APP105
+- name: PDF services
+  owner: IT
+  critical: false
+  users: 125
+  servers:
+  - FAB-APP106
+  - FAB-APP107
+  - FAB-APP108
+  - FAB-APP109
+- name: Translation
+  owner: IT
+  critical: false
+  users: 729
+  servers:
+  - FAB-APP110
+  - FAB-APP111
+  - FAB-APP112
+  - FAB-APP113
+- name: GIS
+  owner: IT
+  critical: false
+  users: 165
+  servers:
+  - FAB-APP114
+  - FAB-APP115
+- name: Pricing engine
+  owner: IT
+  critical: false
+  users: 117
+  servers:
+  - FAB-APP116
+  - FAB-APP117
+- name: Loyalty
+  owner: IT
+  critical: false
+  users: 568
+  servers:
+  - FAB-APP118
+  - FAB-APP119
+  - FAB-APP120
+  - FAB-APP121
+- name: Payments gateway
+  owner: IT
+  critical: false
+  users: 767
+  servers:
+  - FAB-APP122
+  - FAB-APP123
+- name: Recruitment
+  owner: IT
+  critical: false
+  users: 856
+  servers:
+  - FAB-APP124
+  - FAB-APP125
+  - FAB-APP126
+  - FAB-APP127

@@ -1,0 +1,28 @@
+id: windows/restart-service
+version: "1.0.0"
+title: Restart a stopped Windows service
+summary: >-
+  Start a Windows service that has stopped, through the edge node, and check it stays running. Escalates
+  when the service is not installed or will not stay up.
+risk: low
+approval: not_required
+target:
+  kind: server
+connectors: [edge]
+max_targets: 1
+params:
+  - name: service
+    type: string
+    required: true
+    description: The service's short name, such as Spooler.
+  - name: verify_seconds
+    type: integer
+    default: 30
+    min: 5
+    max: 600
+    description: How long the service must stay running.
+triggers:
+  - alert: WindowsServiceStopped
+    params:
+      service: win_service
+rollback: Stop the service again if starting it caused harm.

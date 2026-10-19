@@ -1,0 +1,62 @@
+defaults:
+  min_free_ratio: 0.05
+  rerun_gb: 100
+  max_remove_gb: 5000
+  verify_minutes: 30
+cases:
+  - name: orphans of decommissioned servers make room for the rerun
+    facts:
+      job: EHR SQL nightly
+      job_id: j1
+      repository: FAB-REPO-01
+      capacity_gb: 24576
+      free_gb: 90
+      last_session: {id: s1, state: Stopped, result: failed, message: "Insufficient free space on repository FAB-REPO-01"}
+      orphans:
+        - {id: o1, name: FAB-OLD-LIS01 (job deleted), size_gb: 720}
+        - {id: o2, name: FAB-OLD-LIS02 (job deleted), size_gb: 690}
+    expect: remove_orphans_and_rerun
+    plan:
+      - {remove: FAB-OLD-LIS01 (job deleted)}
+      - {remove: FAB-OLD-LIS02 (job deleted)}
+      - {rerun: EHR SQL nightly}
+  - name: the job already succeeded
+    facts:
+      job: J
+      job_id: j1
+      repository: R
+      capacity_gb: 1000
+      free_gb: 10
+      last_session: {id: s1, state: Stopped, result: success, message: ""}
+      orphans: []
+    expect: none
+  - name: not enough orphans means more storage, which is a person's call
+    facts:
+      job: J
+      job_id: j1
+      repository: R
+      capacity_gb: 24576
+      free_gb: 90
+      last_session: {id: s1, state: Stopped, result: failed, message: "Insufficient free space"}
+      orphans: [{id: o1, name: OLD, size_gb: 200}]
+    expect: escalate
+  - name: a failure that isn't about space goes to an engineer
+    facts:
+      job: J
+      job_id: j1
+      repository: R
+      capacity_gb: 24576
+      free_gb: 9000
+      last_session: {id: s1, state: Stopped, result: failed, message: "Cannot connect to host EHR-SQL01"}
+      orphans: []
+    expect: escalate
+  - name: space came back on its own, so only the rerun is needed
+    facts:
+      job: J
+      job_id: j1
+      repository: R
+      capacity_gb: 24576
+      free_gb: 9000
+      last_session: {id: s1, state: Stopped, result: failed, message: "Insufficient free space on repository"}
+      orphans: []
+    expect: rerun

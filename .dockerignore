@@ -1,0 +1,9 @@
+.env
+.git
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+**/.env
+cockpit/node_modules
+cockpit/dist
