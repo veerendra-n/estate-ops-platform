@@ -5,7 +5,7 @@
   // CONSOLE_TOKEN printed by scripts/demo.sh. Add ANTHROPIC_API_KEY as a Codespaces secret to turn the
   // model-backed investigator and the copilot on; without it the deterministic graph walk runs.
   "name": "estate-ops-platform",
-  "image": "mcr.microsoft.com/devcontainers/python:1-3.13-bookworm",
+  "build": { "dockerfile": "Dockerfile" },
   "features": {
     "ghcr.io/devcontainers/features/docker-in-docker:2": {},
     "ghcr.io/devcontainers/features/node:1": { "version": "22" }
